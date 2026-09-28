@@ -1,76 +1,192 @@
 #!/bin/busybox sh
+# hutinfo — HUTOS System Information Display
+# Show detailed HUTOS system information
 
-# HUT OS System Information
-# hutinfo — compact runtime system summary
+# Source common library
+. /lib/hutos-common.sh 2>/dev/null || {
+	echo "Error: HUTOS common library not found"
+	exit 1
+}
 
-C_RESET="\033[0m"
-C_CYAN="\033[1;36m"
-C_GREEN="\033[1;32m"
-C_WHITE="\033[1;37m"
-C_DIM="\033[2;37m"
+VERSION="1.0.0"
 
-VERSION="3.0.0"
-NAME="HUT OS"
+show_usage() {
+	cat <<-EOF
+		hutinfo — HUTOS System Information Display
+		
+		Usage: hutinfo [options]
+		
+		Options:
+		  --help, -h     Show this help message
+		  --version, -v  Show version information
+		
+		Description:
+		  Displays comprehensive HUTOS system information including:
+		  - Operating system details
+		  - Kernel version and architecture
+		  - CPU information
+		  - Memory statistics
+		  - Uptime and load
+		  - Scheduler information
+		  - Hostname and init system
+		  - Build information
+	EOF
+}
 
-# Prefer os-release when present
-if [ -f /etc/os-release ]; then
-    # shellcheck disable=SC1091
-    . /etc/os-release
-    [ -n "$PRETTY_NAME" ] && NAME="$PRETTY_NAME"
-    [ -n "$VERSION_ID" ] && VERSION="$VERSION_ID"
-fi
+# Parse arguments
+case "$1" in
+	--help|-h)
+		show_usage
+		exit 0
+		;;
+	--version|-v)
+		echo "hutinfo version $VERSION"
+		exit 0
+		;;
+	"")
+		# Continue with normal operation
+		;;
+	*)
+		echo "Error: Unknown option '$1'"
+		show_usage
+		exit 1
+		;;
+esac
 
-KERNEL=$(uname -r 2>/dev/null || echo "unknown")
-ARCH=$(uname -m 2>/dev/null || echo "unknown")
-HOSTNAME=$(hostname 2>/dev/null || echo "hut-os")
-UPTIME=$(uptime 2>/dev/null | sed 's/.*up //;s/,.*//' || echo "unknown")
+print_header "HUTOS System Information"
 
-# Memory (kB → human)
-MEM_TOTAL="unknown"
-MEM_FREE="unknown"
-if [ -f /proc/meminfo ]; then
-    MEM_TOTAL=$(awk '/MemTotal:/ {printf "%.1f MiB", $2/1024}' /proc/meminfo)
-    MEM_FREE=$(awk '/MemAvailable:/ {printf "%.1f MiB", $2/1024} /^MemFree:/ && !found {printf "%.1f MiB", $2/1024; found=1}' /proc/meminfo | head -1)
+# Operating System
+print_section "Operating System"
+print_kv "Name" "$HUTOS_NAME"
+print_kv "Version" "$HUTOS_VERSION"
+print_kv "Hostname" "$(get_hostname)"
+
+# Kernel
+print_section "Kernel"
+print_kv "Version" "$(get_kernel_version)"
+print_kv "Architecture" "$(get_architecture)"
+
+if [ -f /proc/version ]; then
+	KERNEL_FULL=$(cat /proc/version | cut -d' ' -f1-3)
+	print_kv "Full Version" "$KERNEL_FULL"
 fi
 
 # CPU
-CPU="unknown"
+print_section "CPU"
+CPU_MODEL=$(get_cpu_info)
+print_kv "Model" "$CPU_MODEL"
+print_kv "Cores" "$(get_cpu_count)"
+
 if [ -f /proc/cpuinfo ]; then
-    CPU=$(awk -F: '/model name/ {gsub(/^[ \t]+/, "", $2); print $2; exit}' /proc/cpuinfo)
-    [ -z "$CPU" ] && CPU=$(awk -F: '/Hardware|Processor|vendor_id/ {gsub(/^[ \t]+/, "", $2); print $2; exit}' /proc/cpuinfo)
+	CPU_MHZ=$(awk '/cpu MHz/ {printf "%.0f MHz", $4; exit}' /proc/cpuinfo 2>/dev/null)
+	[ -n "$CPU_MHZ" ] && print_kv "Frequency" "$CPU_MHZ"
+	
+	CPU_CACHE=$(awk '/cache size/ {print $4 " " $5; exit}' /proc/cpuinfo 2>/dev/null)
+	[ -n "$CPU_CACHE" ] && print_kv "Cache" "$CPU_CACHE"
 fi
 
-# Load
-LOAD=$(awk '{print $1", "$2", "$3}' /proc/loadavg 2>/dev/null || echo "n/a")
+# Memory
+print_section "Memory"
+print_kv "Total" "$(get_memory_total)"
+print_kv "Free" "$(get_memory_free)"
 
-# Root FS
-ROOTFS=$(df -h / 2>/dev/null | awk 'NR==2 {print $2" total, "$3" used, "$4" free ("$5")"}' || echo "initramfs / in-memory")
+if [ -f /proc/meminfo ]; then
+	MEM_USED=$(awk '/MemTotal:/ {total=$2} /MemAvailable:/ {avail=$2} END {printf "%.1f MiB", (total-avail)/1024}' /proc/meminfo)
+	print_kv "Used" "$MEM_USED"
+	
+	SWAP_TOTAL=$(awk '/SwapTotal:/ {printf "%.1f MiB", $2/1024}' /proc/meminfo)
+	if [ "$SWAP_TOTAL" != "0.0 MiB" ]; then
+		print_kv "Swap Total" "$SWAP_TOTAL"
+		SWAP_FREE=$(awk '/SwapFree:/ {printf "%.1f MiB", $2/1024}' /proc/meminfo)
+		print_kv "Swap Free" "$SWAP_FREE"
+	fi
+fi
 
+# Uptime and Load
+print_section "Uptime and Load"
+print_kv "Uptime" "$(get_uptime)"
+print_kv "Load Average" "$(get_load_average)"
+
+if [ -f /proc/loadavg ]; then
+	RUNNING_TASKS=$(awk '{print $4}' /proc/loadavg | cut -d'/' -f1)
+	TOTAL_TASKS=$(awk '{print $4}' /proc/loadavg | cut -d'/' -f2)
+	print_kv "Tasks" "$RUNNING_TASKS running / $TOTAL_TASKS total"
+fi
+
+# Scheduler
+print_section "Scheduler"
+
+if [ -f /proc/sys/kernel/sched_policy ]; then
+	print_kv "Policy" "$(cat /proc/sys/kernel/sched_policy)"
+else
+	print_kv "Policy" "CFS (Completely Fair Scheduler)"
+fi
+
+if [ -f /proc/hutos_sched ]; then
+	HUTOS_SCHED_ENABLED=$(grep 'enabled:' /proc/hutos_sched 2>/dev/null | awk '{print $2}')
+	if [ "$HUTOS_SCHED_ENABLED" = "yes" ]; then
+		print_kv "HUTOS Monitor" "Enabled (use hutsched for details)"
+	else
+		print_kv "HUTOS Monitor" "Available (disabled)"
+	fi
+else
+	print_kv "HUTOS Monitor" "Not available"
+fi
+
+# Processes
+print_section "Processes"
+if command -v ps >/dev/null 2>&1; then
+	PROCESS_COUNT=$(ps -o pid= | wc -l | tr -d ' ')
+	print_kv "Running" "$PROCESS_COUNT"
+fi
+
+# Init System
+print_section "Init System"
+if [ -f /proc/1/comm ]; then
+	INIT_NAME=$(cat /proc/1/comm)
+	print_kv "PID 1" "$INIT_NAME"
+else
+	print_kv "PID 1" "/init"
+fi
+
+# Shell
+print_section "Shell"
+if [ -n "$SHELL" ]; then
+	print_kv "Current Shell" "$SHELL"
+elif command -v zsh >/dev/null 2>&1; then
+	print_kv "Default Shell" "/bin/zsh"
+else
+	print_kv "Default Shell" "/bin/sh"
+fi
+
+# Filesystem
+print_section "Filesystem"
+if command -v df >/dev/null 2>&1; then
+	ROOTFS_INFO=$(df -h / 2>/dev/null | awk 'NR==2 {print $2" total, "$3" used, "$5" usage"}')
+	if [ -n "$ROOTFS_INFO" ]; then
+		print_kv "Root" "$ROOTFS_INFO"
+	else
+		print_kv "Root" "initramfs (in-memory)"
+	fi
+else
+	print_kv "Root" "initramfs (in-memory)"
+fi
+
+# Build Information
+print_section "Build Information"
+
+if [ -f /etc/hutos-build ]; then
+	. /etc/hutos-build
+	[ -n "$BUILD_DATE" ] && print_kv "Build Date" "$BUILD_DATE"
+	[ -n "$BUILD_HOST" ] && print_kv "Build Host" "$BUILD_HOST"
+else
+	print_kv "Build Info" "Not available"
+fi
+
+print_kv "Userspace" "BusyBox + Zsh"
+
+print_double_separator
 echo ""
-echo -e "${C_CYAN}╔══════════════════════════════════════════════════════════════╗${C_RESET}"
-echo -e "${C_CYAN}║                      HUT OS  ·  hutinfo                      ║${C_RESET}"
-echo -e "${C_CYAN}╚══════════════════════════════════════════════════════════════╝${C_RESET}"
-echo ""
-echo -e "  ${C_WHITE}System${C_RESET}"
-echo -e "    Name         ${C_GREEN}$NAME${C_RESET}"
-echo -e "    Version      $VERSION"
-echo -e "    Hostname     $HOSTNAME"
-echo -e "    Kernel       $KERNEL"
-echo -e "    Architecture $ARCH"
-echo ""
-echo -e "  ${C_WHITE}Hardware${C_RESET}"
-echo -e "    CPU          $CPU"
-echo -e "    Memory       $MEM_TOTAL total, $MEM_FREE available"
-echo -e "    Load         $LOAD"
-echo -e "    Uptime       $UPTIME"
-echo ""
-echo -e "  ${C_WHITE}Storage${C_RESET}"
-echo -e "    Root         $ROOTFS"
-echo ""
-echo -e "  ${C_WHITE}Identity${C_RESET}"
-echo -e "    University   Hamedan University of Technology"
-echo -e "    Developer    Arshia Mohammadei"
-echo -e "    GitHub       https://github.com/itashia"
-echo ""
-echo -e "${C_DIM}  Tip: run ${C_CYAN}about${C_DIM} for the full HUT OS story.${C_RESET}"
+echo -e "${C_DIM}  For focused information, use: ${C_CYAN}hutctl <command>${C_RESET}"
+echo -e "${C_DIM}  Available commands: status, scheduler, memory, cpu, processes${C_RESET}"
 echo ""

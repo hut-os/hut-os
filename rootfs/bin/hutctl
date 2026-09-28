@@ -1,0 +1,195 @@
+#!/bin/busybox sh
+# hutctl — HUTOS System Control CLI
+# Main entry point for HUTOS system management
+
+# Source common library
+. /lib/hutos-common.sh 2>/dev/null || {
+	echo "Error: HUTOS common library not found"
+	exit 1
+}
+
+VERSION="1.0.0"
+
+show_usage() {
+	cat <<-EOF
+		hutctl — HUTOS System Control CLI
+		
+		Usage: hutctl [command] [options]
+		
+		Commands:
+		  status              Show system status overview
+		  info                Show detailed system information
+		  scheduler           Show scheduler information
+		  memory              Show memory information
+		  cpu                 Show CPU information
+		  processes           Show process list
+		  diagnostics         Run system diagnostics
+		  version             Show version information
+		  help                Show this help message
+		
+		Examples:
+		  hutctl status       # Quick system overview
+		  hutctl scheduler    # Scheduler details
+		  hutctl diagnostics  # Run system checks
+		
+		For detailed information: hutctl <command> --help
+	EOF
+}
+
+cmd_status() {
+	print_header "HUTOS System Status"
+	
+	print_section "System"
+	print_kv "OS" "$HUTOS_NAME $HUTOS_VERSION"
+	print_kv "Kernel" "$(get_kernel_version)"
+	print_kv "Hostname" "$(get_hostname)"
+	print_kv "Uptime" "$(get_uptime)"
+	
+	print_section "Hardware"
+	print_kv "Architecture" "$(get_architecture)"
+	print_kv "CPU Cores" "$(get_cpu_count)"
+	print_kv "Memory" "$(get_memory_total)"
+	
+	print_section "Load"
+	print_kv "Load Average" "$(get_load_average)"
+	print_kv "Processes" "$(ps -o pid= | wc -l | tr -d ' ')"
+	
+	echo ""
+}
+
+cmd_info() {
+	if command -v hutinfo >/dev/null 2>&1; then
+		exec hutinfo
+	else
+		die "hutinfo command not found"
+	fi
+}
+
+cmd_scheduler() {
+	if command -v hutsched >/dev/null 2>&1; then
+		exec hutsched status
+	else
+		print_header "Scheduler Information"
+		print_kv "Policy" "$(cat /proc/sys/kernel/sched_policy 2>/dev/null || echo 'CFS')"
+		
+		if [ -f /proc/hutos_sched ]; then
+			print_section "HUTOS Scheduler Stats"
+			cat /proc/hutos_sched
+		else
+			print_status warn "HUTOS scheduler module not available"
+		fi
+		echo ""
+	fi
+}
+
+cmd_memory() {
+	print_header "Memory Information"
+	
+	print_section "Overview"
+	print_kv "Total" "$(get_memory_total)"
+	print_kv "Free" "$(get_memory_free)"
+	
+	if command -v free >/dev/null 2>&1; then
+		print_section "Detailed Memory Usage"
+		free -h
+	fi
+	
+	echo ""
+}
+
+cmd_cpu() {
+	print_header "CPU Information"
+	
+	print_kv "Model" "$(get_cpu_info)"
+	print_kv "Cores" "$(get_cpu_count)"
+	print_kv "Architecture" "$(get_architecture)"
+	
+	if [ -f /proc/cpuinfo ]; then
+		local cpu_mhz
+		cpu_mhz=$(awk '/cpu MHz/ {printf "%.0f MHz", $4; exit}' /proc/cpuinfo 2>/dev/null)
+		[ -n "$cpu_mhz" ] && print_kv "Frequency" "$cpu_mhz"
+	fi
+	
+	print_section "Load Average"
+	print_kv "1/5/15 min" "$(get_load_average)"
+	
+	echo ""
+}
+
+cmd_processes() {
+	print_header "Process List"
+	echo ""
+	
+	if command -v ps >/dev/null 2>&1; then
+		ps aux 2>/dev/null || ps -ef 2>/dev/null || ps
+	else
+		die "ps command not available"
+	fi
+	
+	echo ""
+}
+
+cmd_diagnostics() {
+	if command -v hutdiag >/dev/null 2>&1; then
+		exec hutdiag
+	else
+		print_header "System Diagnostics"
+		print_status warn "hutdiag not found, running basic checks"
+		
+		check_exists /proc && print_status ok "/proc mounted" || print_status fail "/proc not mounted"
+		check_exists /sys && print_status ok "/sys mounted" || print_status fail "/sys not mounted"
+		check_exists /dev && print_status ok "/dev populated" || print_status fail "/dev not populated"
+		
+		echo ""
+	fi
+}
+
+cmd_version() {
+	cat <<-EOF
+		hutctl version $VERSION
+		HUTOS version $HUTOS_VERSION
+		
+		Part of HUT Operating System
+		Hamedan University of Technology
+		
+		Developer: Arshia Mohammadei
+		GitHub: https://github.com/hut-os
+	EOF
+}
+
+# Main
+case "$1" in
+	status)
+		cmd_status
+		;;
+	info)
+		cmd_info
+		;;
+	scheduler|sched)
+		cmd_scheduler
+		;;
+	memory|mem)
+		cmd_memory
+		;;
+	cpu)
+		cmd_cpu
+		;;
+	processes|proc|ps)
+		cmd_processes
+		;;
+	diagnostics|diag)
+		cmd_diagnostics
+		;;
+	version|-v|--version)
+		cmd_version
+		;;
+	help|-h|--help|"")
+		show_usage
+		;;
+	*)
+		echo "Error: Unknown command '$1'"
+		echo ""
+		show_usage
+		exit 1
+		;;
+esac
