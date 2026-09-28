@@ -1,0 +1,224 @@
+#!/bin/busybox sh
+# hut-install — HUT OS CLI installer (BIOS/legacy x86_64)
+# Installs the live system onto a selected block device.
+
+export PATH="/usr/lib/hutos-install/host/bin:/bin:/sbin:/usr/bin:/usr/sbin:${PATH}"
+export LD_LIBRARY_PATH="/usr/lib/hutos-install/host/lib:${LD_LIBRARY_PATH:-}"
+
+HUTOS_INSTALL_LIB="${HUTOS_INSTALL_LIB:-/usr/lib/hutos-install}"
+
+. "$HUTOS_INSTALL_LIB/common.sh"
+. "$HUTOS_INSTALL_LIB/ui.sh"
+. "$HUTOS_INSTALL_LIB/disk.sh"
+. "$HUTOS_INSTALL_LIB/filesystem.sh"
+. "$HUTOS_INSTALL_LIB/copy.sh"
+. "$HUTOS_INSTALL_LIB/config.sh"
+. "$HUTOS_INSTALL_LIB/bootloader.sh"
+
+AUTO=0
+YES=0
+DISK_ARG=""
+HOSTNAME_ARG="hutos"
+ROOT_PASS=""
+USER_NAME=""
+USER_PASS=""
+DO_REBOOT=0
+
+usage() {
+	cat <<EOF
+Usage: hut-install [options]
+
+Interactive HUT OS installer (default), or automated install:
+
+  --auto              Non-interactive install (requires --disk and --yes)
+  --yes               Confirm destructive operations without prompting
+  --disk DEV          Target whole-disk device (e.g. /dev/vda)
+  --hostname NAME     Hostname (default: hutos)
+  --root-password P   Root password (default: empty)
+  --user NAME         Optional user to create
+  --user-password P   Password for --user
+  --reboot            Reboot after successful install
+  -h, --help          Show this help
+
+EOF
+}
+
+hash_password() {
+	plain="$1"
+	if [ -z "$plain" ]; then
+		echo ""
+		return 0
+	fi
+	if command -v mkpasswd >/dev/null 2>&1; then
+		# Prefer SHA-512; fall back to default
+		mkpasswd -m sha512 "$plain" 2>/dev/null \
+			|| mkpasswd "$plain" 2>/dev/null \
+			|| die "mkpasswd failed"
+	else
+		die "mkpasswd not available — cannot hash passwords"
+	fi
+}
+
+do_install() {
+	disk="$1"
+	hostname="$2"
+	root_pass="$3"
+	username="$4"
+	user_pass="$5"
+
+	[ -b "$disk" ] || die "disk not found: $disk"
+	is_whole_disk "$disk" || die "refusing to install to partition (need whole disk): $disk"
+
+	echo ""
+	warn "WARNING:"
+	echo "  All data on ${C_WHITE}${disk}${C_RESET} will be erased."
+	echo "  Partition table will be replaced with a single ext4 root."
+	echo ""
+
+	if [ "$YES" -ne 1 ]; then
+		confirm_yes "Continue? [y/N]" N || die "installation aborted by user"
+	else
+		info "Confirmation skipped (--yes)"
+	fi
+
+	# Unmount anything already mounted from this disk
+	for mp in $(awk -v d="$disk" '$1 ~ d {print $2}' /proc/mounts 2>/dev/null); do
+		warn "Unmounting $mp"
+		umount "$mp" 2>/dev/null || umount -l "$mp" 2>/dev/null || true
+	done
+	fs_umount_target
+
+	part=$(disk_partition_mbr_single "$disk") || die "partitioning failed"
+	[ -b "$part" ] || die "partitioning returned invalid device: $part"
+
+	fs_format_ext4 "$part" "HUTOS"
+	fs_mount_target "$part"
+
+	install_copy_root /
+
+	uuid=$(fs_get_uuid "$part")
+	partuuid=$(fs_get_partuuid "$part")
+	root_hash=$(hash_password "$root_pass")
+	user_hash=""
+	if [ -n "$username" ]; then
+		user_hash=$(hash_password "$user_pass")
+	fi
+
+	root_spec=$(install_write_config "$part" "$uuid" "$hostname" "$root_hash" "$username" "$user_hash" "$partuuid")
+	[ -n "$root_spec" ] || root_spec="$part"
+
+	install_grub_bios "$disk" "$root_spec"
+
+	# Final verification
+	info "Verifying installation..."
+	[ -f "$HUTOS_TARGET_MNT/boot/vmlinuz" ] || die "missing /boot/vmlinuz on target"
+	[ -f "$HUTOS_TARGET_MNT/boot/grub/grub.cfg" ] || die "missing grub.cfg on target"
+	[ -f "$HUTOS_TARGET_MNT/init" ] || die "missing /init on target"
+	[ -f "$HUTOS_TARGET_MNT/etc/fstab" ] || die "missing /etc/fstab on target"
+	ok "Verification passed"
+
+	fs_umount_target
+	sync
+
+	echo ""
+	echo -e "${C_GREEN}========================================${C_RESET}"
+	echo -e "${C_GREEN}  Installation complete${C_RESET}"
+	echo -e "${C_GREEN}========================================${C_RESET}"
+	echo "  Disk:     $disk"
+	echo "  Root:     $part ($root_spec)"
+	echo "  Hostname: $hostname"
+	echo ""
+	echo "  Remove the installation media and reboot to boot HUT OS from disk."
+	echo ""
+}
+
+interactive_install() {
+	ui_header
+	echo "This installer will write HUT OS to a selected disk."
+	echo "Only whole-disk devices are listed. Partitions are not targets."
+	echo ""
+	disk_show || die "no disks available"
+	echo ""
+	printf "Select disk index: "
+	read -r idx || die "no selection"
+	disk=$(disk_by_index "$idx") || die "invalid disk index: $idx"
+	info "Selected: $disk"
+	echo ""
+
+	printf "Hostname [%s]: " "$HOSTNAME_ARG"
+	read -r hn || true
+	[ -n "$hn" ] && HOSTNAME_ARG="$hn"
+
+	printf "Root password (empty = no password): "
+	# BusyBox may not support -s; best effort
+	stty -echo 2>/dev/null || true
+	read -r ROOT_PASS || true
+	stty echo 2>/dev/null || true
+	echo ""
+
+	printf "Create a user? [y/N]: "
+	read -r cu || true
+	case "$cu" in
+		y|Y|yes|YES)
+			printf "Username: "
+			read -r USER_NAME || true
+			[ -n "$USER_NAME" ] || die "username empty"
+			printf "Password for %s: " "$USER_NAME"
+			stty -echo 2>/dev/null || true
+			read -r USER_PASS || true
+			stty echo 2>/dev/null || true
+			echo ""
+			;;
+	esac
+
+	do_install "$disk" "$HOSTNAME_ARG" "$ROOT_PASS" "$USER_NAME" "$USER_PASS"
+
+	if confirm_yes "Reboot now? [y/N]" N; then
+		sync
+		reboot -f 2>/dev/null || reboot || poweroff -f
+	fi
+}
+
+main_menu() {
+	while true; do
+		ui_header
+		ui_menu
+		read -r choice || choice=4
+		case "$choice" in
+			1) interactive_install; return 0 ;;
+			2) ui_header; disk_show; echo ""; printf "Press Enter..."; read -r _ ;;
+			3) ui_header; ui_sysinfo; echo ""; printf "Press Enter..."; read -r _ ;;
+			4|q|Q) echo "Bye."; exit 0 ;;
+			*) warn "Invalid selection" ; sleep 1 ;;
+		esac
+	done
+}
+
+# --- argv ---
+while [ $# -gt 0 ]; do
+	case "$1" in
+		--auto) AUTO=1; shift ;;
+		--yes) YES=1; shift ;;
+		--disk) DISK_ARG="$2"; shift 2 ;;
+		--hostname) HOSTNAME_ARG="$2"; shift 2 ;;
+		--root-password) ROOT_PASS="$2"; shift 2 ;;
+		--user) USER_NAME="$2"; shift 2 ;;
+		--user-password) USER_PASS="$2"; shift 2 ;;
+		--reboot) DO_REBOOT=1; shift ;;
+		-h|--help) usage; exit 0 ;;
+		*) die "unknown option: $1" ;;
+	esac
+done
+
+if [ "$AUTO" -eq 1 ]; then
+	[ -n "$DISK_ARG" ] || die "--auto requires --disk"
+	[ "$YES" -eq 1 ] || die "--auto requires --yes (refusing silent wipe)"
+	do_install "$DISK_ARG" "$HOSTNAME_ARG" "$ROOT_PASS" "$USER_NAME" "$USER_PASS"
+	if [ "$DO_REBOOT" -eq 1 ]; then
+		sync
+		reboot -f 2>/dev/null || reboot || poweroff -f
+	fi
+	exit 0
+fi
+
+main_menu
