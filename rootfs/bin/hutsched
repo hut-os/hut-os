@@ -1,0 +1,59 @@
+#!/bin/busybox sh
+# hutsched — HUTOS Scheduler latency monitor helper
+
+C_CYAN="\033[1;36m"
+C_GREEN="\033[1;32m"
+C_RESET="\033[0m"
+
+PROC=/proc/hutos_sched
+SYSCTL=kernel.hutos_sched_lat
+
+usage() {
+	echo "hutsched — HUTOS Scheduler wait-latency monitor"
+	echo ""
+	echo "Usage: hutsched [command]"
+	echo "  show | status   Show /proc/hutos_sched (default)"
+	echo "  on | enable     Enable collection (sysctl)"
+	echo "  off | disable   Disable collection"
+	echo "  reset           Clear per-CPU counters"
+	echo "  help            This message"
+}
+
+cmd_show() {
+	if [ ! -f "$PROC" ]; then
+		echo "HUTOS-SCHED: $PROC not found (is CONFIG_HUTOS_SCHED_LAT enabled?)"
+		return 1
+	fi
+	cat "$PROC"
+}
+
+cmd_on() {
+	echo 1 > /proc/sys/kernel/hutos_sched_lat 2>/dev/null \
+		|| sysctl -w ${SYSCTL}=1
+	echo -e "${C_GREEN}HUTOS-SCHED:${C_RESET} latency monitor enabled"
+	cmd_show
+}
+
+cmd_off() {
+	echo 0 > /proc/sys/kernel/hutos_sched_lat 2>/dev/null \
+		|| sysctl -w ${SYSCTL}=0
+	echo -e "${C_CYAN}HUTOS-SCHED:${C_RESET} latency monitor disabled"
+}
+
+cmd_reset() {
+	echo reset > "$PROC" 2>/dev/null || {
+		echo "HUTOS-SCHED: reset failed (need root / CAP_SYS_ADMIN)"
+		return 1
+	}
+	echo -e "${C_GREEN}HUTOS-SCHED:${C_RESET} counters cleared"
+	cmd_show
+}
+
+case "${1:-show}" in
+	show|status|"") cmd_show ;;
+	on|enable)      cmd_on ;;
+	off|disable)    cmd_off ;;
+	reset)          cmd_reset ;;
+	help|-h|--help) usage ;;
+	*) echo "Unknown command: $1"; usage; exit 1 ;;
+esac
