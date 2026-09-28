@@ -1,0 +1,9 @@
+# HUT OS network interfaces (BusyBox ifup/ifdown)
+# QEMU user networking: eth0 gets DHCP from 10.0.2.2
+
+auto lo
+iface lo inet loopback
+
+auto eth0
+iface eth0 inet dhcp
+	hostname hut-os

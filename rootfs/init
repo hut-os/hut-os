@@ -1,0 +1,192 @@
+#!/bin/busybox sh
+
+# HUT OS Init Script v3.0
+# Hamedan University of Technology Operating System
+# Developer: Arshia Mohammadei
+#
+# Responsibilities:
+#   mounts → mdev → hostname → networking → banner → Zsh
+
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+export HOME=/root
+export TERM=linux
+export HUTOS_VERSION=3.0.0
+
+C_RESET="\033[0m"
+C_CYAN="\033[1;36m"
+C_GREEN="\033[1;32m"
+C_WHITE="\033[1;37m"
+C_DIM="\033[2;37m"
+C_YELLOW="\033[1;33m"
+
+boot_status() {
+    status="$1"
+    message="$2"
+    case "$status" in
+        ok)   echo -e "${C_GREEN}[ OK ]${C_RESET} $message" ;;
+        info) echo -e "${C_CYAN}[INFO]${C_RESET} $message" ;;
+        warn) echo -e "${C_YELLOW}[WARN]${C_RESET} $message" ;;
+        *)    echo -e "${C_DIM}[ -- ]${C_RESET} $message" ;;
+    esac
+}
+
+try_mount() {
+    # try_mount TYPE DEVICE DIR [OPTS]
+    type="$1"; device="$2"; dir="$3"; opts="$4"
+    mkdir -p "$dir" 2>/dev/null
+    if [ -n "$opts" ]; then
+        mount -t "$type" -o "$opts" "$device" "$dir" 2>/dev/null
+    else
+        mount -t "$type" "$device" "$dir" 2>/dev/null
+    fi
+}
+
+clear 2>/dev/null
+
+echo ""
+echo -e "${C_CYAN}╔═══════════════════════════════════════════════════════════╗${C_RESET}"
+echo -e "${C_CYAN}║                 HUT OS Boot Sequence  v3.0                ║${C_RESET}"
+echo -e "${C_CYAN}╚═══════════════════════════════════════════════════════════╝${C_RESET}"
+echo ""
+
+boot_status "info" "Initializing HUT OS $HUTOS_VERSION..."
+
+# --- Virtual filesystems ---
+if try_mount proc none /proc; then
+    boot_status "ok" "Process filesystem mounted"
+else
+    boot_status "warn" "Process filesystem mount failed"
+fi
+
+if try_mount sysfs none /sys; then
+    boot_status "ok" "System filesystem mounted"
+else
+    boot_status "warn" "System filesystem mount failed"
+fi
+
+if try_mount devtmpfs none /dev "mode=0755"; then
+    boot_status "ok" "Device filesystem mounted"
+else
+    # Fallback: bare tmpfs for /dev
+    if try_mount tmpfs none /dev "mode=0755"; then
+        boot_status "warn" "devtmpfs unavailable — using tmpfs for /dev"
+    else
+        boot_status "warn" "Device filesystem mount failed"
+    fi
+fi
+
+mkdir -p /dev/pts /dev/shm /tmp /run /var/run /var/log 2>/dev/null
+try_mount devpts none /dev/pts "gid=5,mode=620" && boot_status "ok" "Pseudo-terminals ready"
+try_mount tmpfs none /tmp "nosuid,nodev,size=32m" >/dev/null 2>&1
+try_mount tmpfs none /run "nosuid,nodev,mode=0755,size=16m" >/dev/null 2>&1
+
+# --- Device manager (BusyBox mdev) ---
+# Never block boot on slow media (e.g. ISO/CD-ROM under QEMU).
+if [ -x /sbin/mdev ] || [ -x /bin/mdev ]; then
+    echo /sbin/mdev > /proc/sys/kernel/hotplug 2>/dev/null
+    if command -v timeout >/dev/null 2>&1; then
+        timeout 2 mdev -s >/dev/null 2>&1 \
+            && boot_status "ok" "Device manager (mdev) online" \
+            || boot_status "warn" "mdev coldplug timed out (non-critical)"
+    else
+        mdev -s >/dev/null 2>&1 &
+        boot_status "ok" "Device manager (mdev) started"
+    fi
+else
+    boot_status "warn" "mdev not found — using kernel-populated /dev"
+fi
+
+# --- Hostname ---
+if [ -f /etc/hostname ]; then
+    hostname -F /etc/hostname 2>/dev/null \
+        || hostname "$(cat /etc/hostname)" 2>/dev/null \
+        || true
+fi
+boot_status "ok" "Hostname: $(hostname 2>/dev/null || echo hut-os)"
+
+# --- Networking (minimum for QEMU) ---
+ifconfig lo 127.0.0.1 up 2>/dev/null \
+    || ip link set lo up 2>/dev/null \
+    || true
+boot_status "ok" "Loopback interface up"
+
+# Bring up eth0 if present (QEMU -nic user / e1000)
+if [ -d /sys/class/net/eth0 ]; then
+    ifconfig eth0 up 2>/dev/null || ip link set eth0 up 2>/dev/null || true
+    # Best-effort DHCP; never block boot
+    if command -v udhcpc >/dev/null 2>&1; then
+        udhcpc -i eth0 -n -q -t 3 -T 1 >/dev/null 2>&1 \
+            && boot_status "ok" "Network: eth0 (DHCP)" \
+            || boot_status "warn" "Network: eth0 up (no DHCP lease)"
+    else
+        boot_status "ok" "Network: eth0 up"
+    fi
+else
+    boot_status "info" "No eth0 — networking skipped"
+fi
+
+boot_status "ok" "BusyBox userspace online"
+boot_status "ok" "HUT OS base ready"
+
+# --- Banner ---
+echo ""
+echo -e "${C_CYAN}═══════════════════════════════════════════════════════════${C_RESET}"
+echo ""
+
+if [ -f /etc/hut-banner.txt ]; then
+    cat /etc/hut-banner.txt
+else
+    echo -e "${C_CYAN}        _   _ _   _ _____    ___  ____  ${C_RESET}"
+    echo -e "${C_CYAN}       | | | | | | |_   _|  / _ \\/ ___| ${C_RESET}"
+    echo -e "${C_CYAN}       | |_| | | | | | |   | | | \\___ \\ ${C_RESET}"
+    echo -e "${C_CYAN}       |  _  | |_| | | |   | |_| |___) |${C_RESET}"
+    echo -e "${C_CYAN}       |_| |_|\\___/  |_|    \\___/|____/ ${C_RESET}"
+fi
+
+echo ""
+echo -e "${C_WHITE}════════════════════════════════════════════════════════════${C_RESET}"
+echo -e "${C_WHITE}                          H U T   O S                       ${C_RESET}"
+echo -e "${C_WHITE}              Hamedan University of Technology              ${C_RESET}"
+echo -e "${C_WHITE}════════════════════════════════════════════════════════════${C_RESET}"
+echo ""
+echo -e "${C_GREEN}             Welcome to HUT Operating System                ${C_RESET}"
+echo ""
+echo -e "${C_DIM}         A minimal Linux-based OS, built from scratch       ${C_RESET}"
+echo -e "${C_DIM}            in a university dormitory study hall.           ${C_RESET}"
+echo ""
+echo -e "${C_CYAN}────────────────────────────────────────────────────────────${C_RESET}"
+echo -e "  ${C_WHITE}Developer:${C_RESET}  Arshia Mohammadei"
+echo -e "  ${C_WHITE}GitHub:${C_RESET}     https://github.com/itashia"
+echo -e "  ${C_WHITE}Field:${C_RESET}      Mechanical Engineering - 2nd Semester"
+echo -e "  ${C_WHITE}Version:${C_RESET}    $HUTOS_VERSION"
+echo -e "${C_CYAN}────────────────────────────────────────────────────────────${C_RESET}"
+echo ""
+echo -e "${C_DIM}  \"One day I was sitting in the dormitory study hall,"
+echo -e "   had nothing better to do, and started building my own"
+echo -e "   operating system."
+echo ""
+echo -e "   And what better name could it have than our university?"
+echo ""
+echo -e "   Welcome to HUT OS.\"${C_RESET}"
+echo ""
+echo -e "${C_CYAN}════════════════════════════════════════════════════════════${C_RESET}"
+echo ""
+echo -e "${C_GREEN}System ready.${C_RESET} Try ${C_CYAN}about${C_RESET} or ${C_CYAN}hutinfo${C_RESET}."
+echo ""
+
+cd /root 2>/dev/null || cd /
+
+# Keep a shell forever — exiting must not kill PID 1
+boot_status "ok" "Starting Zsh shell"
+while true; do
+    if [ -x /bin/zsh ]; then
+        /bin/zsh
+    else
+        boot_status "warn" "Zsh not found — falling back to ash"
+        export PS1="hut@hut-os:\\w# "
+        /bin/sh
+    fi
+    echo ""
+    echo -e "${C_DIM}Shell exited. Restarting... (use poweroff/reboot to shut down)${C_RESET}"
+    echo ""
+done
