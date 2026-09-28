@@ -51,6 +51,13 @@ echo ""
 
 boot_status "info" "Initializing HUT OS $HUTOS_VERSION..."
 
+# --- Essential directories (must exist before any /dev/null redirects) ---
+mkdir -p /proc /sys /dev /tmp /run /var/run /var/log
+[ -c /dev/null ]    || mknod -m 666 /dev/null c 1 3
+[ -c /dev/zero ]    || mknod -m 666 /dev/zero c 1 5
+[ -c /dev/console ] || mknod -m 600 /dev/console c 5 1
+[ -c /dev/tty ]     || mknod -m 666 /dev/tty c 5 0
+
 # --- Virtual filesystems ---
 if try_mount proc none /proc; then
     boot_status "ok" "Process filesystem mounted"
@@ -67,13 +74,20 @@ fi
 if try_mount devtmpfs none /dev "mode=0755"; then
     boot_status "ok" "Device filesystem mounted"
 else
-    # Fallback: bare tmpfs for /dev
     if try_mount tmpfs none /dev "mode=0755"; then
         boot_status "warn" "devtmpfs unavailable — using tmpfs for /dev"
     else
         boot_status "warn" "Device filesystem mount failed"
     fi
 fi
+
+# Re-create essential nodes after remounting /dev
+[ -c /dev/null ]    || mknod -m 666 /dev/null c 1 3
+[ -c /dev/zero ]    || mknod -m 666 /dev/zero c 1 5
+[ -c /dev/console ] || mknod -m 600 /dev/console c 5 1
+[ -c /dev/tty ]     || mknod -m 666 /dev/tty c 5 0
+[ -c /dev/tty0 ]    || mknod -m 666 /dev/tty0 c 4 0
+[ -c /dev/ttyS0 ]   || mknod -m 666 /dev/ttyS0 c 4 64
 
 mkdir -p /dev/pts /dev/shm /tmp /run /var/run /var/log 2>/dev/null
 try_mount devpts none /dev/pts "gid=5,mode=620" && boot_status "ok" "Pseudo-terminals ready"
@@ -128,6 +142,80 @@ fi
 boot_status "ok" "BusyBox userspace online"
 boot_status "ok" "HUT OS base ready"
 
+# --- Optional auto-install (QEMU / automation) ---
+# Kernel cmdline: hutos.install=/dev/vda  [hutos.e2e=1]
+HUTOS_INSTALL_DISK=""
+if [ -r /proc/cmdline ]; then
+    for arg in $(cat /proc/cmdline); do
+        case "$arg" in
+            hutos.install=*)
+                HUTOS_INSTALL_DISK="${arg#hutos.install=}"
+                ;;
+            hutos.e2e=1|hutos.e2e)
+                export HUTOS_E2E=1
+                ;;
+        esac
+    done
+fi
+
+if [ -n "$HUTOS_INSTALL_DISK" ] && [ -x /bin/hut-install ]; then
+    boot_status "info" "Auto-install requested → $HUTOS_INSTALL_DISK"
+    # Wait for the target disk node to appear
+    _wait=0
+    while [ ! -b "$HUTOS_INSTALL_DISK" ] && [ "$_wait" -lt 20 ]; do
+        mdev -s >/dev/null 2>&1 || true
+        sleep 1
+        _wait=$((_wait + 1))
+    done
+    if [ ! -b "$HUTOS_INSTALL_DISK" ]; then
+        boot_status "warn" "Disk $HUTOS_INSTALL_DISK not found — skipping auto-install"
+    else
+        /bin/hut-install --auto --yes --disk "$HUTOS_INSTALL_DISK" --hostname hutos --reboot
+        boot_status "warn" "Auto-install finished without reboot"
+    fi
+fi
+
+# Live media hint
+if [ -x /bin/hut-install ]; then
+    _disk_count=0
+    for _p in /sys/block/*; do
+        _n=$(basename "$_p")
+        case "$_n" in loop*|ram*|fd*|sr*|dm-*|md*) continue ;; esac
+        [ -b "/dev/$_n" ] && _disk_count=$((_disk_count + 1))
+    done
+fi
+
+# --- Optional self-test (installed-system verification) ---
+HUTOS_SELFTEST=0
+if [ -f /etc/hutos/selftest-once ]; then
+    HUTOS_SELFTEST=1
+    rm -f /etc/hutos/selftest-once
+fi
+if [ -r /proc/cmdline ]; then
+    for arg in $(cat /proc/cmdline); do
+        case "$arg" in
+            hutos.selftest=1|hutos.selftest)
+                HUTOS_SELFTEST=1
+                ;;
+        esac
+    done
+fi
+
+if [ "$HUTOS_SELFTEST" = "1" ]; then
+    echo ""
+    echo "=== HUTOS SELFTEST BEGIN ==="
+    uname -a 2>&1 || true
+    if command -v about >/dev/null 2>&1; then about 2>&1 || true; fi
+    if command -v hutinfo >/dev/null 2>&1; then hutinfo 2>&1 || true; fi
+    if command -v hutsched >/dev/null 2>&1; then hutsched status 2>&1 || true; fi
+    if command -v hutdiag >/dev/null 2>&1; then hutdiag 2>&1 || true; fi
+    echo "hostname=$(hostname 2>/dev/null || echo unknown)"
+    echo "fstab:" && cat /etc/fstab 2>&1 || true
+    echo "=== HUTOS SELFTEST END ==="
+    sync
+    poweroff -f 2>/dev/null || reboot -f 2>/dev/null || true
+fi
+
 # --- Banner ---
 echo ""
 echo -e "${C_CYAN}═══════════════════════════════════════════════════════════${C_RESET}"
@@ -171,7 +259,7 @@ echo -e "   Welcome to HUT OS.\"${C_RESET}"
 echo ""
 echo -e "${C_CYAN}════════════════════════════════════════════════════════════${C_RESET}"
 echo ""
-echo -e "${C_GREEN}System ready.${C_RESET} Try ${C_CYAN}about${C_RESET} or ${C_CYAN}hutinfo${C_RESET}."
+echo -e "${C_GREEN}System ready.${C_RESET} Try ${C_CYAN}about${C_RESET}, ${C_CYAN}hutinfo${C_RESET}, or ${C_CYAN}hut-install${C_RESET}."
 echo ""
 
 cd /root 2>/dev/null || cd /
