@@ -1,0 +1,76 @@
+#!/bin/busybox sh
+
+# HUT OS System Information
+# hutinfo — compact runtime system summary
+
+C_RESET="\033[0m"
+C_CYAN="\033[1;36m"
+C_GREEN="\033[1;32m"
+C_WHITE="\033[1;37m"
+C_DIM="\033[2;37m"
+
+VERSION="3.0.0"
+NAME="HUT OS"
+
+# Prefer os-release when present
+if [ -f /etc/os-release ]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    [ -n "$PRETTY_NAME" ] && NAME="$PRETTY_NAME"
+    [ -n "$VERSION_ID" ] && VERSION="$VERSION_ID"
+fi
+
+KERNEL=$(uname -r 2>/dev/null || echo "unknown")
+ARCH=$(uname -m 2>/dev/null || echo "unknown")
+HOSTNAME=$(hostname 2>/dev/null || echo "hut-os")
+UPTIME=$(uptime 2>/dev/null | sed 's/.*up //;s/,.*//' || echo "unknown")
+
+# Memory (kB → human)
+MEM_TOTAL="unknown"
+MEM_FREE="unknown"
+if [ -f /proc/meminfo ]; then
+    MEM_TOTAL=$(awk '/MemTotal:/ {printf "%.1f MiB", $2/1024}' /proc/meminfo)
+    MEM_FREE=$(awk '/MemAvailable:/ {printf "%.1f MiB", $2/1024} /^MemFree:/ && !found {printf "%.1f MiB", $2/1024; found=1}' /proc/meminfo | head -1)
+fi
+
+# CPU
+CPU="unknown"
+if [ -f /proc/cpuinfo ]; then
+    CPU=$(awk -F: '/model name/ {gsub(/^[ \t]+/, "", $2); print $2; exit}' /proc/cpuinfo)
+    [ -z "$CPU" ] && CPU=$(awk -F: '/Hardware|Processor|vendor_id/ {gsub(/^[ \t]+/, "", $2); print $2; exit}' /proc/cpuinfo)
+fi
+
+# Load
+LOAD=$(awk '{print $1", "$2", "$3}' /proc/loadavg 2>/dev/null || echo "n/a")
+
+# Root FS
+ROOTFS=$(df -h / 2>/dev/null | awk 'NR==2 {print $2" total, "$3" used, "$4" free ("$5")"}' || echo "initramfs / in-memory")
+
+echo ""
+echo -e "${C_CYAN}╔══════════════════════════════════════════════════════════════╗${C_RESET}"
+echo -e "${C_CYAN}║                      HUT OS  ·  hutinfo                      ║${C_RESET}"
+echo -e "${C_CYAN}╚══════════════════════════════════════════════════════════════╝${C_RESET}"
+echo ""
+echo -e "  ${C_WHITE}System${C_RESET}"
+echo -e "    Name         ${C_GREEN}$NAME${C_RESET}"
+echo -e "    Version      $VERSION"
+echo -e "    Hostname     $HOSTNAME"
+echo -e "    Kernel       $KERNEL"
+echo -e "    Architecture $ARCH"
+echo ""
+echo -e "  ${C_WHITE}Hardware${C_RESET}"
+echo -e "    CPU          $CPU"
+echo -e "    Memory       $MEM_TOTAL total, $MEM_FREE available"
+echo -e "    Load         $LOAD"
+echo -e "    Uptime       $UPTIME"
+echo ""
+echo -e "  ${C_WHITE}Storage${C_RESET}"
+echo -e "    Root         $ROOTFS"
+echo ""
+echo -e "  ${C_WHITE}Identity${C_RESET}"
+echo -e "    University   Hamedan University of Technology"
+echo -e "    Developer    Arshia Mohammadei"
+echo -e "    GitHub       https://github.com/itashia"
+echo ""
+echo -e "${C_DIM}  Tip: run ${C_CYAN}about${C_DIM} for the full HUT OS story.${C_RESET}"
+echo ""

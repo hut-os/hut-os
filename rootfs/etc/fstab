@@ -1,0 +1,10 @@
+# HUT OS filesystem table
+# Used when booting from a persistent disk image
+
+# <fs>         <mountpoint> <type>  <opts>          <dump> <pass>
+proc           /proc        proc    defaults         0      0
+sysfs          /sys         sysfs   defaults         0      0
+devtmpfs       /dev         devtmpfs defaults,mode=0755 0   0
+tmpfs          /tmp         tmpfs   defaults,nosuid,nodev,size=32m 0 0
+tmpfs          /run         tmpfs   defaults,nosuid,nodev,mode=0755,size=16m 0 0
+devpts         /dev/pts     devpts  defaults,gid=5,mode=620 0 0

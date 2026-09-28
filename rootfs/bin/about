@@ -1,0 +1,94 @@
+#!/bin/busybox sh
+
+# HUT OS About Command
+# Display system and developer information
+
+# ANSI Colors
+C_RESET="\033[0m"
+C_CYAN="\033[1;36m"
+C_GREEN="\033[1;32m"
+C_WHITE="\033[1;37m"
+C_DIM="\033[2;37m"
+C_BLUE="\033[1;34m"
+
+clear
+echo ""
+echo -e "${C_CYAN}╔══════════════════════════════════════════════════════════════╗${C_RESET}"
+echo -e "${C_CYAN}║                         H U T   O S                          ║${C_RESET}"
+echo -e "${C_CYAN}║             Hamedan University of Technology                 ║${C_RESET}"
+echo -e "${C_CYAN}╚══════════════════════════════════════════════════════════════╝${C_RESET}"
+echo ""
+
+# System Information
+echo -e "${C_WHITE}Operating System${C_RESET}"
+echo -e "  ${C_GREEN}HUT OS 3.0${C_RESET} - Hamedan University of Technology Operating System"
+echo ""
+
+echo -e "${C_WHITE}Base${C_RESET}"
+echo -e "  Custom Linux Kernel"
+echo -e "  BusyBox Userspace + mdev"
+echo -e "  Zsh + Oh My Zsh"
+echo -e "  Initramfs / ext4 disk / GRUB ISO"
+echo ""
+echo -e "${C_DIM}  Tip: run ${C_CYAN}hutinfo${C_DIM} for runtime system stats.${C_RESET}"
+echo ""
+
+echo -e "${C_WHITE}University${C_RESET}"
+echo -e "  ${C_CYAN}Hamedan University of Technology${C_RESET}"
+echo ""
+
+echo -e "${C_CYAN}────────────────────────────────────────────────────────────${C_RESET}"
+echo ""
+
+# Developer Information
+echo -e "${C_WHITE}Developer Information${C_RESET}"
+echo ""
+echo -e "  ${C_GREEN}Name:${C_RESET}      Arshia Mohammadei"
+echo -e "  ${C_GREEN}GitHub:${C_RESET}    ${C_BLUE}https://github.com/itashia${C_RESET}"
+echo -e "  ${C_GREEN}Field:${C_RESET}     Mechanical Engineering"
+echo -e "  ${C_GREEN}Semester:${C_RESET}  2nd Semester (at project start)"
+echo ""
+
+echo -e "${C_CYAN}────────────────────────────────────────────────────────────${C_RESET}"
+echo ""
+
+# Project Story
+echo -e "${C_WHITE}The Story${C_RESET}"
+echo ""
+echo -e "${C_DIM}  One day, sitting in the dormitory study hall with nothing"
+echo -e "  better to do, I decided to build my own operating system."
+echo ""
+echo -e "  As a second-semester mechanical engineering student at"
+echo -e "  Hamedan University of Technology, I wondered:"
+echo ""
+echo -e "  ${C_WHITE}\"What better name than our university?\"${C_RESET}"
+echo ""
+echo -e "  And so, ${C_GREEN}HUT OS${C_RESET} was born."
+echo ""
+echo -e "  Built from scratch using:"
+echo -e "    • Custom Linux kernel configuration"
+echo -e "    • BusyBox minimal userspace"
+echo -e "    • Hand-crafted initramfs"
+echo -e "    • Pure determination and curiosity"
+echo ""
+echo -e "  This isn't just an OS. It's a testament to what you can"
+echo -e "  achieve when you have time, curiosity, and access to"
+echo -e "  a quiet study hall.${C_RESET}"
+echo ""
+
+echo -e "${C_CYAN}════════════════════════════════════════════════════════════${C_RESET}"
+echo ""
+echo -e "${C_GREEN}        Proudly built at Hamedan University of Technology${C_RESET}"
+echo ""
+echo -e "${C_CYAN}════════════════════════════════════════════════════════════${C_RESET}"
+echo ""
+
+# System specs (if available)
+if [ -f /proc/version ]; then
+    echo -e "${C_WHITE}Kernel Version${C_RESET}"
+    cat /proc/version
+    echo ""
+fi
+
+echo -e "${C_DIM}Type 'exit' to power down, or continue exploring HUT OS.${C_RESET}"
+echo ""
