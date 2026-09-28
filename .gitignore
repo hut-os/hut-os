@@ -1,0 +1,30 @@
+# Build outputs
+/build/
+/initramfs.cpio.gz
+/hutos.img
+/hutos.iso
+*.cpio
+*.cpio.gz
+*.iso
+*.img
+
+# Full upstream Linux tree lives elsewhere — only configs/ is tracked here
+/kernel/
+
+# Editor / OS junk
+*~
+*.swp
+*.swo
+.DS_Store
+.vscode/
+.idea/
+
+# Temporary / local notes
+.PROJECT_COMPLETE.md
+*.log
+/tmp/
+
+# Zsh completion dump
+**/.zcompdump*
+**/root/.zsh_history
+**/home/*/.zsh_history
