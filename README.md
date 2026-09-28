@@ -100,3 +100,9 @@ GitHub: [@itashia](https://github.com/itashia)
 ## License
 
 GPL-2.0 — see [LICENSE](LICENSE). Third-party components keep their upstream licenses.
+
+## HUTOS Scheduler
+
+Optional run-queue wait latency monitor (`CONFIG_HUTOS_SCHED_LAT`).
+
+See [docs/SCHED.md](docs/SCHED.md). Inside HUT OS: `hutsched on` then `hutsched show`.
