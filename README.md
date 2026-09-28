@@ -25,9 +25,13 @@ cd hut-os
 Other boot modes:
 
 ```bash
-./scripts/run-disk.sh   # persistent ext4 root
-./scripts/run-iso.sh    # GRUB ISO
+./scripts/run-disk.sh         # persistent ext4 root
+./scripts/run-iso.sh          # GRUB ISO (live)
+./scripts/run-install-iso.sh  # live ISO + blank disk for hut-install
+./scripts/test-install-qemu.sh # end-to-end install → disk boot test
 ```
+
+Installer documentation: [`docs/INSTALL.md`](docs/INSTALL.md). Artifact: `dist/hutos-x86_64.iso`.
 
 Exit QEMU: **Ctrl+A** then **X**.
 
@@ -50,8 +54,9 @@ GRUB / QEMU -kernel
 | Component | Implementation |
 |-----------|----------------|
 | Kernel | Upstream Linux + [`configs/hutos_defconfig`](configs/hutos_defconfig) |
-| Bootloader | GRUB2 (ISO) |
-| Persistent FS | ext4 disk image |
+| Bootloader | GRUB2 (ISO + installed disk MBR) |
+| Persistent FS | ext4 (disk image / installer target) |
+| Installer | `hut-install` CLI — see [`docs/INSTALL.md`](docs/INSTALL.md) |
 | Init | Custom BusyBox ash `/init` |
 | Devices | BusyBox mdev + `devtmpfs` |
 | Networking | loopback + eth0 DHCP |
@@ -69,10 +74,12 @@ Related repositories:
 
 ```
 hut-os/
-├── rootfs/           # Userspace root filesystem
-├── scripts/          # Build and run helpers
+├── rootfs/           # Userspace root filesystem (+ hut-install)
+├── installer/        # Installer overview / wrapper
+├── scripts/          # Build, run, and QEMU install tests
 ├── configs/          # Kernel defconfig
-├── docs/             # Design and build documentation
+├── docs/             # Design and install documentation
+├── dist/             # ISO artifacts (gitignored)
 ├── build.sh          # Unified build entry point
 └── run.sh            # QEMU initramfs boot
 ```
