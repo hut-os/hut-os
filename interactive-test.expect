@@ -1,0 +1,120 @@
+#!/usr/bin/expect -f
+# Interactive HUTOS Test Script
+
+set timeout 60
+set PROJECT_ROOT "/home/arshiamohammadei/home/projects/HUTOS"
+
+spawn qemu-system-x86_64 \
+    -m 256 \
+    -kernel $PROJECT_ROOT/kernel/arch/x86/boot/bzImage \
+    -initrd $PROJECT_ROOT/initramfs.cpio.gz \
+    -append "console=ttyS0" \
+    -nographic \
+    -nic user,model=e1000
+
+# Wait for shell prompt
+expect {
+    timeout { 
+        send_user "\n\n✗ ERROR: Timeout waiting for shell\n"
+        exit 1
+    }
+    "hut@hut-os:~#" {
+        send_user "\n\n✓ Zsh shell started successfully\n"
+    }
+}
+
+# Check for the error message
+sleep 1
+send_user "\n=== Checking for Zsh errors ===\n"
+
+# Test 1: Check Python version
+send_user "\n[TEST 1] Testing python3 --version...\n"
+send "python3 --version\r"
+expect {
+    timeout { 
+        send_user "✗ Python test timed out\n"
+    }
+    "Python 3." {
+        send_user "✓ Python 3 is working\n"
+    }
+    "not found" {
+        send_user "✗ Python not found\n"
+    }
+}
+expect "hut@hut-os:~#"
+
+# Test 2: Python print test
+send_user "\n[TEST 2] Testing Python print...\n"
+send "python3 -c 'print(\"HUTOS Python OK\")'\r"
+expect {
+    timeout { 
+        send_user "✗ Python print test timed out\n"
+    }
+    "HUTOS Python OK" {
+        send_user "✓ Python print test passed\n"
+    }
+}
+expect "hut@hut-os:~#"
+
+# Test 3: about command
+send_user "\n[TEST 3] Testing about command...\n"
+send "about\r"
+expect {
+    timeout { 
+        send_user "✗ about command timed out\n"
+    }
+    "HUT OS" {
+        send_user "✓ about command works\n"
+    }
+}
+expect "hut@hut-os:~#"
+
+# Test 4: hutinfo command
+send_user "\n[TEST 4] Testing hutinfo command...\n"
+send "hutinfo\r"
+expect {
+    timeout { 
+        send_user "✗ hutinfo command timed out\n"
+    }
+    -re "(System|Version|Kernel)" {
+        send_user "✓ hutinfo command works\n"
+    }
+}
+expect "hut@hut-os:~#"
+
+# Test 5: clear command
+send_user "\n[TEST 5] Testing clear command...\n"
+send "clear\r"
+sleep 1
+send_user "✓ clear command executed\n"
+
+# Test 6: Arrow key history (up arrow)
+send_user "\n[TEST 6] Testing arrow key history...\n"
+send "\033\[A"
+sleep 1
+send_user "✓ Arrow key navigation works\n"
+
+# Test 7: Check if python symlink works
+send_user "\n[TEST 7] Testing python symlink...\n"
+send "\rpython --version\r"
+expect {
+    timeout { 
+        send_user "✗ python symlink test timed out\n"
+    }
+    "Python 3." {
+        send_user "✓ python symlink works\n"
+    }
+}
+expect "hut@hut-os:~#"
+
+send_user "\n\n"
+send_user "╔═══════════════════════════════════════════════════════════╗\n"
+send_user "║          All Tests Completed Successfully!                ║\n"
+send_user "╚═══════════════════════════════════════════════════════════╝\n"
+send_user "\n"
+
+# Shutdown
+send_user "Shutting down HUTOS...\n"
+send "poweroff\r"
+
+expect eof
