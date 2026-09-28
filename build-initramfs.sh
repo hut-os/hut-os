@@ -36,10 +36,17 @@ if [ ! -f "$ROOTFS_DIR/bin/busybox" ]; then
     exit 1
 fi
 
-# Ensure about script is executable
-if [ -f "$ROOTFS_DIR/bin/about" ]; then
-    chmod +x "$ROOTFS_DIR/bin/about"
-    echo "  ✓ About command configured"
+# Ensure HUTOS tools are executable
+for tool in about hutctl hutinfo hutsched hutbench hutdiag; do
+    if [ -f "$ROOTFS_DIR/bin/$tool" ]; then
+        chmod +x "$ROOTFS_DIR/bin/$tool"
+    fi
+done
+
+# Ensure common library is present
+if [ -f "$ROOTFS_DIR/lib/hutos-common.sh" ]; then
+    chmod +x "$ROOTFS_DIR/lib/hutos-common.sh"
+    echo "  ✓ HUTOS tools configured"
 fi
 
 # Check for banner

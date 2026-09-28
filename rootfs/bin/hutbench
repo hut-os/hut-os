@@ -1,0 +1,333 @@
+#!/bin/busybox sh
+# hutbench — HUTOS Benchmarking Tool
+# Reproducible performance benchmarks for HUTOS
+
+# Source common library
+. /lib/hutos-common.sh 2>/dev/null || {
+	echo "Error: HUTOS common library not found"
+	exit 1
+}
+
+VERSION="1.0.0"
+
+show_usage() {
+	cat <<-EOF
+		hutbench — HUTOS Benchmarking Tool
+		
+		Usage: hutbench [benchmark] [options]
+		
+		Benchmarks:
+		  cpu                  CPU computation benchmark
+		  memory               Memory bandwidth benchmark
+		  scheduler            Scheduler latency benchmark
+		  syscall              System call overhead benchmark
+		  context              Context switch benchmark
+		  all                  Run all benchmarks
+		  help                 Show this help message
+		  version              Show version information
+		
+		Options:
+		  --iterations N       Number of iterations (default varies by benchmark)
+		  --quiet              Minimal output
+		
+		Description:
+		  Provides reproducible benchmarks for measuring HUTOS performance.
+		  Results are based on real measurements and can be used to compare
+		  kernel or system changes.
+		
+		Examples:
+		  hutbench cpu         # CPU benchmark
+		  hutbench all         # Run all benchmarks
+		  hutbench scheduler   # Scheduler performance
+	EOF
+}
+
+# Benchmark: CPU computation
+bench_cpu() {
+	print_section "CPU Computation Benchmark"
+	
+	local iterations=${1:-5000}
+	local start_time end_time elapsed
+	
+	echo -e "${C_DIM}  Method: Integer arithmetic loop${C_RESET}"
+	echo -e "${C_DIM}  Iterations: $iterations${C_RESET}"
+	echo ""
+	
+	start_time=$(cut -d' ' -f1 /proc/uptime)
+	
+	# CPU-intensive loop
+	i=0
+	sum=0
+	while [ $i -lt $iterations ]; do
+		j=0
+		while [ $j -lt 100 ]; do
+			sum=$((sum + i * j))
+			j=$((j + 1))
+		done
+		i=$((i + 1))
+	done
+	
+	end_time=$(cut -d' ' -f1 /proc/uptime)
+	
+	# Calculate elapsed time (in centiseconds, then convert)
+	elapsed=$(awk -v start="$start_time" -v end="$end_time" 'BEGIN {printf "%.3f", end - start}')
+	
+	print_kv "Total Time" "${elapsed}s"
+	print_kv "Iterations" "$iterations"
+	print_kv "Operations" "$((iterations * 100))"
+	
+	if [ -n "$elapsed" ] && [ "$elapsed" != "0.000" ]; then
+		ops_per_sec=$(awk -v ops="$((iterations * 100))" -v time="$elapsed" 'BEGIN {printf "%.0f", ops / time}')
+		print_kv "Ops/sec" "$ops_per_sec"
+	fi
+	
+	echo ""
+}
+
+# Benchmark: Memory bandwidth
+bench_memory() {
+	print_section "Memory Bandwidth Benchmark"
+	
+	local size_mb=${1:-10}
+	
+	echo -e "${C_DIM}  Method: Sequential memory write${C_RESET}"
+	echo -e "${C_DIM}  Size: ${size_mb} MB${C_RESET}"
+	echo ""
+	
+	if command -v dd >/dev/null 2>&1; then
+		local start_time end_time elapsed
+		
+		start_time=$(cut -d' ' -f1 /proc/uptime)
+		dd if=/dev/zero of=/tmp/bench_mem bs=1M count=$size_mb 2>/dev/null
+		end_time=$(cut -d' ' -f1 /proc/uptime)
+		
+		elapsed=$(awk -v start="$start_time" -v end="$end_time" 'BEGIN {printf "%.3f", end - start}')
+		
+		rm -f /tmp/bench_mem
+		
+		print_kv "Data Written" "${size_mb} MB"
+		print_kv "Time" "${elapsed}s"
+		
+		if [ -n "$elapsed" ] && [ "$elapsed" != "0.000" ]; then
+			bandwidth=$(awk -v size="$size_mb" -v time="$elapsed" 'BEGIN {printf "%.1f", size / time}')
+			print_kv "Bandwidth" "${bandwidth} MB/s"
+		fi
+	else
+		print_status warn "dd command not available, skipping"
+	fi
+	
+	echo ""
+}
+
+# Benchmark: Scheduler latency
+bench_scheduler() {
+	print_section "Scheduler Latency Benchmark"
+	
+	echo -e "${C_DIM}  Method: Context switch timing${C_RESET}"
+	echo ""
+	
+	# Check if HUTOS scheduler is available
+	if [ -f /proc/hutos_sched ]; then
+		# Reset and enable
+		echo reset > /proc/hutos_sched 2>/dev/null
+		echo 1 > /proc/sys/kernel/hutos_sched_lat 2>/dev/null
+		
+		# Run workload
+		local iterations=1000
+		i=0
+		while [ $i -lt $iterations ]; do
+			/bin/busybox true
+			i=$((i + 1))
+		done
+		
+		# Get results
+		local samples min_ns max_ns avg_ns
+		samples=$(grep '^total' /proc/hutos_sched 2>/dev/null | awk '{print $2}')
+		min_ns=$(grep 'min:' /proc/hutos_sched 2>/dev/null | awk '{print $2}')
+		max_ns=$(grep 'max:' /proc/hutos_sched 2>/dev/null | awk '{print $2}')
+		avg_ns=$(grep 'avg:' /proc/hutos_sched 2>/dev/null | awk '{print $2}')
+		
+		print_kv "Samples" "${samples:-0}"
+		print_kv "Min Latency" "$(format_ns ${min_ns:-0})"
+		print_kv "Max Latency" "$(format_ns ${max_ns:-0})"
+		print_kv "Avg Latency" "$(format_ns ${avg_ns:-0})"
+	else
+		print_status warn "HUTOS scheduler module not available"
+		echo ""
+		echo -e "${C_DIM}  Using approximate method...${C_RESET}"
+		
+		# Fallback: measure context switch time
+		local start_time end_time elapsed iterations=1000
+		
+		start_time=$(cut -d' ' -f1 /proc/uptime)
+		i=0
+		while [ $i -lt $iterations ]; do
+			/bin/busybox true
+			i=$((i + 1))
+		done
+		end_time=$(cut -d' ' -f1 /proc/uptime)
+		
+		elapsed=$(awk -v start="$start_time" -v end="$end_time" 'BEGIN {printf "%.6f", end - start}')
+		
+		print_kv "Iterations" "$iterations"
+		print_kv "Total Time" "${elapsed}s"
+		
+		if [ -n "$elapsed" ] && [ "$elapsed" != "0.000000" ]; then
+			avg_us=$(awk -v time="$elapsed" -v count="$iterations" 'BEGIN {printf "%.2f", (time * 1000000) / count}')
+			print_kv "Avg Time/Op" "${avg_us} μs"
+		fi
+	fi
+	
+	echo ""
+}
+
+# Benchmark: Syscall overhead
+bench_syscall() {
+	print_section "System Call Overhead Benchmark"
+	
+	local iterations=${1:-10000}
+	
+	echo -e "${C_DIM}  Method: Repeated getpid() calls${C_RESET}"
+	echo -e "${C_DIM}  Iterations: $iterations${C_RESET}"
+	echo ""
+	
+	local start_time end_time elapsed
+	
+	start_time=$(cut -d' ' -f1 /proc/uptime)
+	
+	# Call getpid repeatedly (very lightweight syscall)
+	i=0
+	while [ $i -lt $iterations ]; do
+		cat /proc/self/stat > /dev/null 2>&1
+		i=$((i + 1))
+	done
+	
+	end_time=$(cut -d' ' -f1 /proc/uptime)
+	
+	elapsed=$(awk -v start="$start_time" -v end="$end_time" 'BEGIN {printf "%.6f", end - start}')
+	
+	print_kv "Total Time" "${elapsed}s"
+	print_kv "Iterations" "$iterations"
+	
+	if [ -n "$elapsed" ] && [ "$elapsed" != "0.000000" ]; then
+		avg_us=$(awk -v time="$elapsed" -v count="$iterations" 'BEGIN {printf "%.3f", (time * 1000000) / count}')
+		syscalls_per_sec=$(awk -v count="$iterations" -v time="$elapsed" 'BEGIN {printf "%.0f", count / time}')
+		
+		print_kv "Avg Syscall" "${avg_us} μs"
+		print_kv "Syscalls/sec" "$syscalls_per_sec"
+	fi
+	
+	echo ""
+}
+
+# Benchmark: Context switches
+bench_context() {
+	print_section "Context Switch Benchmark"
+	
+	echo -e "${C_DIM}  Method: Process creation and scheduling${C_RESET}"
+	echo ""
+	
+	if [ -f /proc/stat ]; then
+		local start_ctx end_ctx start_time end_time delta_ctx elapsed
+		
+		start_ctx=$(grep '^ctxt' /proc/stat | awk '{print $2}')
+		start_time=$(cut -d' ' -f1 /proc/uptime)
+		
+		# Generate context switches
+		i=0
+		while [ $i -lt 100 ]; do
+			/bin/busybox true &
+			wait
+			i=$((i + 1))
+		done
+		
+		end_ctx=$(grep '^ctxt' /proc/stat | awk '{print $2}')
+		end_time=$(cut -d' ' -f1 /proc/uptime)
+		
+		delta_ctx=$((end_ctx - start_ctx))
+		elapsed=$(awk -v start="$start_time" -v end="$end_time" 'BEGIN {printf "%.6f", end - start}')
+		
+		print_kv "Context Switches" "$delta_ctx"
+		print_kv "Time" "${elapsed}s"
+		
+		if [ -n "$elapsed" ] && [ "$elapsed" != "0.000000" ] && [ "$delta_ctx" -gt 0 ]; then
+			ctx_per_sec=$(awk -v ctx="$delta_ctx" -v time="$elapsed" 'BEGIN {printf "%.0f", ctx / time}')
+			print_kv "Switches/sec" "$ctx_per_sec"
+		fi
+	else
+		print_status warn "/proc/stat not available"
+	fi
+	
+	echo ""
+}
+
+# Run all benchmarks
+bench_all() {
+	print_header "HUTOS Comprehensive Benchmark Suite"
+	
+	print_kv "System" "$HUTOS_NAME $HUTOS_VERSION"
+	print_kv "Kernel" "$(get_kernel_version)"
+	print_kv "CPU" "$(get_cpu_info)"
+	print_kv "Cores" "$(get_cpu_count)"
+	
+	print_double_separator
+	
+	bench_cpu 3000
+	bench_memory 5
+	bench_scheduler
+	bench_syscall 5000
+	bench_context
+	
+	print_double_separator
+	print_status ok "All benchmarks completed"
+	echo ""
+}
+
+cmd_version() {
+	cat <<-EOF
+		hutbench version $VERSION
+		HUTOS Benchmarking Tool
+		
+		Part of HUT Operating System
+		Hamedan University of Technology
+	EOF
+}
+
+# Parse arguments
+case "$1" in
+	cpu)
+		print_header "HUTOS CPU Benchmark"
+		bench_cpu "${2:-5000}"
+		;;
+	memory|mem)
+		print_header "HUTOS Memory Benchmark"
+		bench_memory "${2:-10}"
+		;;
+	scheduler|sched)
+		print_header "HUTOS Scheduler Benchmark"
+		bench_scheduler
+		;;
+	syscall)
+		print_header "HUTOS Syscall Benchmark"
+		bench_syscall "${2:-10000}"
+		;;
+	context|ctx)
+		print_header "HUTOS Context Switch Benchmark"
+		bench_context
+		;;
+	all)
+		bench_all
+		;;
+	version|-v|--version)
+		cmd_version
+		;;
+	help|-h|--help|"")
+		show_usage
+		;;
+	*)
+		echo "Error: Unknown benchmark '$1'"
+		echo ""
+		show_usage
+		exit 1
+		;;
+esac

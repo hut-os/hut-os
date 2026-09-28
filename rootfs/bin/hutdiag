@@ -1,0 +1,292 @@
+#!/bin/busybox sh
+# hutdiag — HUTOS Diagnostic Utility
+# System health and component verification
+
+# Source common library
+. /lib/hutos-common.sh 2>/dev/null || {
+	echo "Error: HUTOS common library not found"
+	exit 1
+}
+
+VERSION="1.0.0"
+WARNINGS=0
+ERRORS=0
+
+show_usage() {
+	cat <<-EOF
+		hutdiag — HUTOS Diagnostic Utility
+		
+		Usage: hutdiag [options]
+		
+		Options:
+		  --help, -h       Show this help message
+		  --version, -v    Show version information
+		  --verbose        Show detailed output
+		
+		Description:
+		  Performs comprehensive system diagnostics including:
+		  - Kernel status
+		  - CPU availability
+		  - Memory status
+		  - Filesystem mounts (/proc, /sys, /dev)
+		  - Root filesystem
+		  - Init system
+		  - Scheduler
+		  - HUTOS components
+		  - Network (if available)
+		  - Essential commands
+		
+		Exit Codes:
+		  0 - All checks passed
+		  1 - Warnings found
+		  2 - Errors found
+	EOF
+}
+
+# Check and report status
+check() {
+	local name="$1"
+	local test_command="$2"
+	local required="${3:-no}"
+	
+	if eval "$test_command" >/dev/null 2>&1; then
+		print_status ok "$name"
+		return 0
+	else
+		if [ "$required" = "yes" ]; then
+			print_status fail "$name"
+			ERRORS=$((ERRORS + 1))
+			return 1
+		else
+			print_status warn "$name"
+			WARNINGS=$((WARNINGS + 1))
+			return 1
+		fi
+	fi
+}
+
+# Parse arguments
+VERBOSE=0
+case "$1" in
+	--help|-h)
+		show_usage
+		exit 0
+		;;
+	--version|-v)
+		echo "hutdiag version $VERSION"
+		exit 0
+		;;
+	--verbose)
+		VERBOSE=1
+		;;
+	"")
+		# Continue with normal operation
+		;;
+	*)
+		echo "Error: Unknown option '$1'"
+		show_usage
+		exit 1
+		;;
+esac
+
+print_header "HUTOS System Diagnostics"
+
+# System Information
+print_section "System Information"
+print_kv "OS" "$HUTOS_NAME $HUTOS_VERSION"
+print_kv "Kernel" "$(get_kernel_version)"
+print_kv "Architecture" "$(get_architecture)"
+
+print_double_separator
+
+# Kernel
+print_section "Kernel"
+check "Kernel version" "[ -f /proc/version ]" yes
+check "Kernel command line" "[ -f /proc/cmdline ]" yes
+check "Kernel modules support" "[ -d /proc/modules ]" no
+
+# CPU
+print_section "CPU"
+check "CPU info available" "[ -f /proc/cpuinfo ]" yes
+CPU_COUNT=$(get_cpu_count)
+if [ "$CPU_COUNT" -gt 0 ]; then
+	print_status ok "CPU cores: $CPU_COUNT"
+else
+	print_status fail "CPU cores: unknown"
+	ERRORS=$((ERRORS + 1))
+fi
+
+# Memory
+print_section "Memory"
+check "Memory info available" "[ -f /proc/meminfo ]" yes
+MEM_TOTAL=$(get_memory_total)
+if [ "$MEM_TOTAL" != "unknown" ]; then
+	print_status ok "Memory total: $MEM_TOTAL"
+else
+	print_status warn "Memory total: unknown"
+	WARNINGS=$((WARNINGS + 1))
+fi
+
+MEM_FREE=$(get_memory_free)
+if [ "$MEM_FREE" != "unknown" ]; then
+	print_status ok "Memory free: $MEM_FREE"
+else
+	print_status warn "Memory free: unknown"
+fi
+
+# Virtual Filesystems
+print_section "Virtual Filesystems"
+check "/proc mounted" "[ -d /proc ] && [ -f /proc/version ]" yes
+check "/sys mounted" "[ -d /sys ] && [ -d /sys/kernel ]" yes
+check "/dev populated" "[ -d /dev ] && [ -e /dev/null ]" yes
+check "/dev/pts available" "[ -d /dev/pts ]" no
+check "/dev/shm available" "[ -d /dev/shm ]" no
+
+# Root Filesystem
+print_section "Root Filesystem"
+check "Root directory accessible" "[ -d / ] && [ -r / ]" yes
+check "/tmp writable" "[ -d /tmp ] && [ -w /tmp ]" yes
+check "/var accessible" "[ -d /var ]" no
+
+if command -v df >/dev/null 2>&1; then
+	ROOTFS_USAGE=$(df / 2>/dev/null | awk 'NR==2 {print $5}' | tr -d '%')
+	if [ -n "$ROOTFS_USAGE" ]; then
+		if [ "$ROOTFS_USAGE" -lt 90 ]; then
+			print_status ok "Root filesystem usage: ${ROOTFS_USAGE}%"
+		else
+			print_status warn "Root filesystem usage: ${ROOTFS_USAGE}% (high)"
+			WARNINGS=$((WARNINGS + 1))
+		fi
+	fi
+fi
+
+# Init System
+print_section "Init System"
+check "PID 1 running" "[ -d /proc/1 ]" yes
+
+if [ -f /proc/1/comm ]; then
+	INIT_NAME=$(cat /proc/1/comm)
+	print_status ok "Init process: $INIT_NAME"
+else
+	print_status warn "Init process name: unknown"
+fi
+
+check "Init script exists" "[ -f /init ] || [ -f /sbin/init ]" yes
+
+# Scheduler
+print_section "Scheduler"
+
+if [ -f /proc/stat ]; then
+	CTXT=$(grep '^ctxt' /proc/stat | awk '{print $2}')
+	if [ -n "$CTXT" ] && [ "$CTXT" -gt 0 ]; then
+		print_status ok "Context switches: $CTXT"
+	fi
+fi
+
+if [ -f /proc/hutos_sched ]; then
+	print_status ok "HUTOS scheduler module available"
+	SCHED_ENABLED=$(grep 'enabled:' /proc/hutos_sched 2>/dev/null | awk '{print $2}')
+	if [ "$SCHED_ENABLED" = "yes" ]; then
+		print_status ok "HUTOS scheduler monitoring: enabled"
+	else
+		print_status info "HUTOS scheduler monitoring: disabled"
+	fi
+else
+	print_status info "HUTOS scheduler module: not available"
+fi
+
+# HUTOS Components
+print_section "HUTOS Components"
+check "BusyBox" "command -v busybox" yes
+check "Zsh shell" "command -v zsh" no
+check "hutinfo" "command -v hutinfo" no
+check "hutsched" "command -v hutsched" no
+check "hutbench" "command -v hutbench" no
+check "hutctl" "command -v hutctl" no
+check "about" "command -v about" no
+
+# Essential Commands
+print_section "Essential Commands"
+check "sh" "command -v sh" yes
+check "ps" "command -v ps" yes
+check "ls" "command -v ls" yes
+check "cat" "command -v cat" yes
+check "mount" "command -v mount" yes
+check "ip/ifconfig" "command -v ip || command -v ifconfig" no
+
+# Network
+print_section "Network"
+check "Loopback interface" "[ -d /sys/class/net/lo ]" yes
+
+if [ -d /sys/class/net/lo ]; then
+	LO_STATE=$(cat /sys/class/net/lo/operstate 2>/dev/null)
+	if [ "$LO_STATE" = "unknown" ] || [ "$LO_STATE" = "up" ]; then
+		print_status ok "Loopback state: up"
+	else
+		print_status warn "Loopback state: $LO_STATE"
+		WARNINGS=$((WARNINGS + 1))
+	fi
+fi
+
+if [ -d /sys/class/net/eth0 ]; then
+	print_status ok "eth0 interface present"
+	ETH_STATE=$(cat /sys/class/net/eth0/operstate 2>/dev/null)
+	if [ "$ETH_STATE" = "up" ]; then
+		print_status ok "eth0 state: up"
+	else
+		print_status info "eth0 state: $ETH_STATE"
+	fi
+else
+	print_status info "eth0 not available (expected in minimal environment)"
+fi
+
+# Processes
+print_section "Processes"
+if command -v ps >/dev/null 2>&1; then
+	PROC_COUNT=$(ps -o pid= | wc -l | tr -d ' ')
+	if [ "$PROC_COUNT" -gt 0 ]; then
+		print_status ok "Running processes: $PROC_COUNT"
+	else
+		print_status fail "No processes detected"
+		ERRORS=$((ERRORS + 1))
+	fi
+	
+	# Check for zombies
+	ZOMBIE_COUNT=$(ps -o state= | grep -c Z 2>/dev/null || echo 0)
+	if [ "$ZOMBIE_COUNT" -eq 0 ]; then
+		print_status ok "No zombie processes"
+	else
+		print_status warn "Zombie processes: $ZOMBIE_COUNT"
+		WARNINGS=$((WARNINGS + 1))
+	fi
+fi
+
+# Device Manager
+print_section "Device Manager"
+check "mdev" "command -v mdev" no
+
+if [ -f /proc/sys/kernel/hotplug ]; then
+	HOTPLUG=$(cat /proc/sys/kernel/hotplug)
+	if [ -n "$HOTPLUG" ]; then
+		print_status ok "Hotplug handler: $HOTPLUG"
+	fi
+fi
+
+# Summary
+print_double_separator
+print_section "Diagnostic Summary"
+
+TOTAL_CHECKS=$((WARNINGS + ERRORS))
+if [ "$ERRORS" -eq 0 ] && [ "$WARNINGS" -eq 0 ]; then
+	print_status ok "All checks passed"
+	echo ""
+	exit 0
+elif [ "$ERRORS" -eq 0 ]; then
+	print_status warn "$WARNINGS warning(s) found"
+	echo ""
+	exit 1
+else
+	print_status fail "$ERRORS error(s), $WARNINGS warning(s) found"
+	echo ""
+	exit 2
+fi
