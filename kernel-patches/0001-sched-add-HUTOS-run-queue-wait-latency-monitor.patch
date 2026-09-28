@@ -1,0 +1,378 @@
+From 33a471fb976ecdf8aadba87d2bd4ad135cef5b94 Mon Sep 17 00:00:00 2001
+From: Arshia Mohammadei <itarrshia@gmail.com>
+Date: Mon, 28 Sep 2026 23:34:25 +0330
+Subject: [PATCH] sched: add HUTOS run-queue wait latency monitor
+
+Introduce CONFIG_HUTOS_SCHED_LAT, a lightweight HUT OS scheduler
+extension that records per-CPU run-queue wait latency using the
+existing SCHED_INFO arrive path.
+
+Collection is gated by a static key (off by default) and can be
+enabled via sysctl kernel.hutos_sched_lat or the hutos_sched_lat=
+cmdline parameter. Statistics are exported through /proc/hutos_sched.
+
+This does not change scheduling policy; it only adds optional
+observability for education and diagnostics.
+
+Co-authored-by: Cursor <cursoragent@cursor.com>
+---
+ init/Kconfig                 |  24 ++++
+ kernel/sched/build_utility.c |   4 +
+ kernel/sched/hutos_lat.c     | 232 +++++++++++++++++++++++++++++++++++
+ kernel/sched/hutos_lat.h     |  33 +++++
+ kernel/sched/stats.h         |   3 +
+ 5 files changed, 296 insertions(+)
+ create mode 100644 kernel/sched/hutos_lat.c
+ create mode 100644 kernel/sched/hutos_lat.h
+
+diff --git a/init/Kconfig b/init/Kconfig
+index 8583d9f06..f3365e69c 100644
+--- a/init/Kconfig
++++ b/init/Kconfig
+@@ -934,6 +934,30 @@ config UCLAMP_BUCKETS_COUNT
+ 
+ 	  If in doubt, use the default value.
+ 
++config HUTOS_SCHED_LAT
++	bool "HUTOS Scheduler run-queue wait latency monitor"
++	depends on PROC_FS
++	select SCHED_INFO
++	help
++	  Enable the HUT OS (Hamedan University of Technology OS) lightweight
++	  scheduler extension that measures how long runnable tasks wait on
++	  the runqueue before executing.
++
++	  Statistics are exposed via /proc/hutos_sched. Collection is gated
++	  by a static key and is disabled by default. Enable at runtime with:
++
++	    sysctl kernel.hutos_sched_lat=1
++
++	  or on the kernel command line:
++
++	    hutos_sched_lat=1
++
++	  When disabled, the scheduler hot path cost is a single unlikely
++	  branch. This is intended for education, diagnostics, and HUT OS
++	  demos — not a replacement for CONFIG_SCHEDSTATS.
++
++	  If unsure, say Y for HUT OS builds, N otherwise.
++
+ config SCHED_PROXY_EXEC
+ 	bool "Proxy Execution"
+ 	# Avoid some build failures w/ PREEMPT_RT until it can be fixed
+diff --git a/kernel/sched/build_utility.c b/kernel/sched/build_utility.c
+index e2cf3b08d..6a7e09463 100644
+--- a/kernel/sched/build_utility.c
++++ b/kernel/sched/build_utility.c
+@@ -93,6 +93,10 @@
+ # include "psi.c"
+ #endif
+ 
++#ifdef CONFIG_HUTOS_SCHED_LAT
++# include "hutos_lat.c"
++#endif
++
+ #ifdef CONFIG_MEMBARRIER
+ # include "membarrier.c"
+ #endif
+diff --git a/kernel/sched/hutos_lat.c b/kernel/sched/hutos_lat.c
+new file mode 100644
+index 000000000..f9145a795
+--- /dev/null
++++ b/kernel/sched/hutos_lat.c
+@@ -0,0 +1,232 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * HUTOS Scheduler — run-queue wait latency monitor
++ *
++ * Built on top of CONFIG_SCHED_INFO timestamps. Accounting runs from
++ * sched_info_arrive() only when the static key is enabled, keeping the
++ * default hot path cost to a single unlikely() branch.
++ *
++ * Userspace interface:
++ *   /proc/hutos_sched              — human-readable per-CPU stats
++ *   kernel.hutos_sched_lat (sysctl)— 0/1 enable switch
++ *   kernel cmdline: hutos_sched_lat=0|1
++ *
++ * Write "reset" to /proc/hutos_sched to clear counters.
++ */
++
++#include <linux/seq_file.h>
++#include <linux/proc_fs.h>
++#include <linux/sysctl.h>
++#include <linux/uaccess.h>
++#include <linux/cpumask.h>
++#include <linux/math64.h>
++#include <linux/string.h>
++#include <linux/capability.h>
++
++#include "hutos_lat.h"
++
++DEFINE_STATIC_KEY_FALSE(hutos_sched_lat_key);
++
++struct hutos_sched_lat_cpu {
++	u64	samples;
++	u64	sum_ns;
++	u64	max_ns;
++	u64	min_ns;
++} ____cacheline_aligned_in_smp;
++
++static DEFINE_PER_CPU(struct hutos_sched_lat_cpu, hutos_sched_lat_stats);
++
++void hutos_sched_lat_account(u64 delta_ns)
++{
++	struct hutos_sched_lat_cpu *s;
++
++	/* Ignore zero-wait arrivals; they dominate and hide real latency. */
++	if (!delta_ns)
++		return;
++
++	s = this_cpu_ptr(&hutos_sched_lat_stats);
++
++	s->samples++;
++	s->sum_ns += delta_ns;
++
++	if (delta_ns > s->max_ns)
++		s->max_ns = delta_ns;
++
++	if (!s->min_ns || delta_ns < s->min_ns)
++		s->min_ns = delta_ns;
++}
++
++static void hutos_sched_lat_reset(void)
++{
++	int cpu;
++
++	for_each_possible_cpu(cpu) {
++		struct hutos_sched_lat_cpu *s = &per_cpu(hutos_sched_lat_stats, cpu);
++
++		s->samples = 0;
++		s->sum_ns = 0;
++		s->max_ns = 0;
++		s->min_ns = 0;
++	}
++}
++
++static void hutos_sched_lat_set(bool enabled)
++{
++	if (enabled)
++		static_branch_enable(&hutos_sched_lat_key);
++	else
++		static_branch_disable(&hutos_sched_lat_key);
++}
++
++static int __init setup_hutos_sched_lat(char *str)
++{
++	if (!str)
++		return 0;
++
++	if (!strcmp(str, "1") || !strcmp(str, "enable") || !strcmp(str, "on")) {
++		hutos_sched_lat_set(true);
++		return 1;
++	}
++	if (!strcmp(str, "0") || !strcmp(str, "disable") || !strcmp(str, "off")) {
++		hutos_sched_lat_set(false);
++		return 1;
++	}
++
++	pr_warn("hutos_sched_lat: unable to parse '%s'\n", str);
++	return 0;
++}
++__setup("hutos_sched_lat=", setup_hutos_sched_lat);
++
++#ifdef CONFIG_PROC_FS
++static int hutos_sched_lat_show(struct seq_file *m, void *v)
++{
++	int cpu;
++	u64 g_samples = 0, g_sum = 0, g_max = 0, g_min = 0;
++	bool enabled = static_branch_unlikely(&hutos_sched_lat_key);
++
++	seq_puts(m, "HUTOS Scheduler — run-queue wait latency\n");
++	seq_printf(m, "enabled: %s\n", enabled ? "yes" : "no");
++	seq_puts(m, "unit: nanoseconds (rq clock)\n");
++	seq_puts(m, "note: enable via sysctl kernel.hutos_sched_lat=1\n");
++	seq_puts(m, "      or kernel cmdline hutos_sched_lat=1\n");
++	seq_puts(m, "      write 'reset' here to clear counters\n\n");
++
++	seq_printf(m, "%-6s %12s %14s %14s %14s %14s\n",
++		   "cpu", "samples", "avg_ns", "min_ns", "max_ns", "sum_ns");
++
++	for_each_possible_cpu(cpu) {
++		struct hutos_sched_lat_cpu *s = &per_cpu(hutos_sched_lat_stats, cpu);
++		u64 samples = s->samples;
++		u64 sum = s->sum_ns;
++		u64 max = s->max_ns;
++		u64 min = s->min_ns;
++		u64 avg = samples ? div64_u64(sum, samples) : 0;
++
++		seq_printf(m, "%-6d %12llu %14llu %14llu %14llu %14llu\n",
++			   cpu, samples, avg, min, max, sum);
++
++		g_samples += samples;
++		g_sum += sum;
++		if (max > g_max)
++			g_max = max;
++		if (samples) {
++			if (!g_min || min < g_min)
++				g_min = min;
++		}
++	}
++
++	seq_puts(m, "\n");
++	seq_printf(m, "%-6s %12llu %14llu %14llu %14llu %14llu\n",
++		   "total",
++		   g_samples,
++		   g_samples ? div64_u64(g_sum, g_samples) : 0,
++		   g_min,
++		   g_max,
++		   g_sum);
++
++	return 0;
++}
++
++static int hutos_sched_lat_open(struct inode *inode, struct file *file)
++{
++	return single_open(file, hutos_sched_lat_show, NULL);
++}
++
++static ssize_t hutos_sched_lat_write(struct file *file, const char __user *buf,
++				     size_t count, loff_t *ppos)
++{
++	char kbuf[16];
++	size_t len = min(count, sizeof(kbuf) - 1);
++
++	if (!capable(CAP_SYS_ADMIN))
++		return -EPERM;
++
++	if (copy_from_user(kbuf, buf, len))
++		return -EFAULT;
++	kbuf[len] = '\0';
++
++	if (sysfs_streq(kbuf, "reset")) {
++		hutos_sched_lat_reset();
++		return count;
++	}
++
++	return -EINVAL;
++}
++
++static const struct proc_ops hutos_sched_lat_ops = {
++	.proc_open	= hutos_sched_lat_open,
++	.proc_read	= seq_read,
++	.proc_lseek	= seq_lseek,
++	.proc_release	= single_release,
++	.proc_write	= hutos_sched_lat_write,
++};
++#endif /* CONFIG_PROC_FS */
++
++#ifdef CONFIG_SYSCTL
++static int sysctl_hutos_sched_lat(const struct ctl_table *table, int write,
++				  void *buffer, size_t *lenp, loff_t *ppos)
++{
++	struct ctl_table t;
++	int err;
++	int state = static_branch_unlikely(&hutos_sched_lat_key);
++
++	if (write && !capable(CAP_SYS_ADMIN))
++		return -EPERM;
++
++	t = *table;
++	t.data = &state;
++	err = proc_dointvec_minmax(&t, write, buffer, lenp, ppos);
++	if (err < 0)
++		return err;
++	if (write)
++		hutos_sched_lat_set(state);
++	return err;
++}
++
++static const struct ctl_table hutos_sched_lat_sysctls[] = {
++	{
++		.procname	= "hutos_sched_lat",
++		.data		= NULL,
++		.maxlen		= sizeof(unsigned int),
++		.mode		= 0644,
++		.proc_handler	= sysctl_hutos_sched_lat,
++		.extra1		= SYSCTL_ZERO,
++		.extra2		= SYSCTL_ONE,
++	},
++};
++#endif /* CONFIG_SYSCTL */
++
++static int __init hutos_sched_lat_init(void)
++{
++#ifdef CONFIG_PROC_FS
++	if (!proc_create("hutos_sched", 0644, NULL, &hutos_sched_lat_ops))
++		pr_warn("HUTOS-SCHED: failed to create /proc/hutos_sched\n");
++#endif
++#ifdef CONFIG_SYSCTL
++	register_sysctl_init("kernel", hutos_sched_lat_sysctls);
++#endif
++	pr_info("HUTOS-SCHED: run-queue wait latency monitor registered "
++		"(disabled by default)\n");
++	return 0;
++}
++late_initcall(hutos_sched_lat_init);
+diff --git a/kernel/sched/hutos_lat.h b/kernel/sched/hutos_lat.h
+new file mode 100644
+index 000000000..4c16c5d0b
+--- /dev/null
++++ b/kernel/sched/hutos_lat.h
+@@ -0,0 +1,33 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++#ifndef _KERNEL_SCHED_HUTOS_LAT_H
++#define _KERNEL_SCHED_HUTOS_LAT_H
++
++/*
++ * HUTOS Scheduler — lightweight run-queue wait-latency monitor.
++ *
++ * Collects per-CPU statistics for how long runnable tasks wait on the
++ * runqueue before first hitting a CPU. Disabled by default via a static
++ * key; enable with "hutos_sched_lat=1" or sysctl kernel.hutos_sched_lat=1.
++ */
++
++#ifdef CONFIG_HUTOS_SCHED_LAT
++
++#include <linux/jump_label.h>
++
++extern struct static_key_false hutos_sched_lat_key;
++
++void hutos_sched_lat_account(u64 delta_ns);
++
++static inline void hutos_sched_lat_update(u64 delta_ns)
++{
++	if (static_branch_unlikely(&hutos_sched_lat_key))
++		hutos_sched_lat_account(delta_ns);
++}
++
++#else /* !CONFIG_HUTOS_SCHED_LAT */
++
++static inline void hutos_sched_lat_update(u64 delta_ns) { }
++
++#endif /* CONFIG_HUTOS_SCHED_LAT */
++
++#endif /* _KERNEL_SCHED_HUTOS_LAT_H */
+diff --git a/kernel/sched/stats.h b/kernel/sched/stats.h
+index ebe0a7765..31fdf4d21 100644
+--- a/kernel/sched/stats.h
++++ b/kernel/sched/stats.h
+@@ -2,6 +2,8 @@
+ #ifndef _KERNEL_STATS_H
+ #define _KERNEL_STATS_H
+ 
++#include "hutos_lat.h"
++
+ #ifdef CONFIG_SCHEDSTATS
+ 
+ extern struct static_key_false sched_schedstats;
+@@ -281,6 +283,7 @@ static void sched_info_arrive(struct rq *rq, struct task_struct *t)
+ 		t->sched_info.min_run_delay = delta;
+ 
+ 	rq_sched_info_arrive(rq, delta);
++	hutos_sched_lat_update(delta);
+ }
+ 
+ /*
+-- 
+2.53.0
+

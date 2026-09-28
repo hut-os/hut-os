@@ -1,0 +1,46 @@
+#!/bin/busybox sh
+# HUTOS-SCHED microbenchmark (run as init for measurement)
+# Usage: qemu ... -append "console=ttyS0 rdinit=/bin/hutsched-bench"
+
+export PATH=/bin:/sbin
+
+mount -t proc none /proc 2>/dev/null
+mount -t sysfs none /sys 2>/dev/null
+mount -t devtmpfs none /dev 2>/dev/null
+
+echo "=== HUTOS-SCHED benchmark ==="
+dmesg | grep HUTOS-SCHED || true
+
+N=1500
+
+run_loop() {
+	i=0
+	while [ "$i" -lt "$N" ]; do
+		/bin/busybox true
+		i=$((i + 1))
+	done
+}
+
+echo 0 > /proc/sys/kernel/hutos_sched_lat
+echo reset > /proc/hutos_sched
+
+echo 0 > /proc/sys/kernel/hutos_sched_lat
+echo reset > /proc/hutos_sched
+T0=$(cut -d' ' -f1 /proc/uptime)
+run_loop
+T1=$(cut -d' ' -f1 /proc/uptime)
+echo "BENCH_OFF_UPTIME_START $T0"
+echo "BENCH_OFF_UPTIME_END $T1"
+echo "BENCH_OFF_SAMPLES $(grep '^total' /proc/hutos_sched | awk '{print $2}')"
+
+echo 1 > /proc/sys/kernel/hutos_sched_lat
+echo reset > /proc/hutos_sched
+T2=$(cut -d' ' -f1 /proc/uptime)
+run_loop
+T3=$(cut -d' ' -f1 /proc/uptime)
+echo "BENCH_ON_UPTIME_START $T2"
+echo "BENCH_ON_UPTIME_END $T3"
+grep -E 'enabled:|^cpu |^total' /proc/hutos_sched
+
+echo "=== done ==="
+poweroff -f
