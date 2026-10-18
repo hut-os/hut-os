@@ -5,7 +5,7 @@ set timeout 60
 set PROJECT_ROOT "/home/arshiamohammadei/home/projects/HUTOS"
 
 spawn qemu-system-x86_64 \
-    -m 256 \
+    -m 512 \
     -kernel $PROJECT_ROOT/kernel/arch/x86/boot/bzImage \
     -initrd $PROJECT_ROOT/initramfs.cpio.gz \
     -append "console=ttyS0" \

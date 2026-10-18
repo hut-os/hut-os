@@ -27,10 +27,10 @@ EOF
 
 # Run QEMU with command input
 timeout 45 qemu-system-x86_64 \
+    -m 512 \
     -kernel "$KERNEL" \
     -initrd "$INITRD" \
     -append "console=ttyS0 quiet" \
-    -m 512M \
     -smp 2 \
     -nographic \
     -no-reboot < /tmp/hutos-cmds.txt 2>&1 | tee /tmp/hutos-test-output.txt

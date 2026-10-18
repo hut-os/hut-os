@@ -1,0 +1,38 @@
+#!/bin/busybox sh
+# BusyBox udhcpc lease script: configure the address, default route and DNS.
+set -eu
+
+IFACE=${interface:-eth0}
+
+case "${1:-}" in
+    deconfig)
+        ifconfig "$IFACE" 0.0.0.0 2>/dev/null || true
+        route del default dev "$IFACE" 2>/dev/null || true
+        ;;
+    bound|renew)
+        : "${ip:?DHCP lease has no address}"
+        MASK=${subnet:-255.255.255.0}
+        ifconfig "$IFACE" "$ip" netmask "$MASK" up
+        route del default dev "$IFACE" 2>/dev/null || true
+        for gateway in ${router:-}; do
+            route add default gw "$gateway" dev "$IFACE" 2>/dev/null || true
+            break
+        done
+        tmp="/run/resolv.conf.$$"
+        : > "$tmp"
+        for server in ${dns:-}; do
+            echo "nameserver $server" >> "$tmp"
+        done
+        if [ -n "${domain:-}" ]; then echo "search $domain" >> "$tmp"; fi
+        if [ -s "$tmp" ]; then
+            chmod 0644 "$tmp"
+            mv -f "$tmp" /etc/resolv.conf
+        else
+            rm -f "$tmp"
+        fi
+        ;;
+    nak)
+        echo "udhcpc: DHCP server denied the request on $IFACE" >&2
+        ;;
+esac
+exit 0

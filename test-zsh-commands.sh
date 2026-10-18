@@ -17,10 +17,10 @@ cat > /tmp/hutos-test.exp << 'EOF'
 set timeout 30
 
 spawn qemu-system-x86_64 \
+    -m 512 \
     -kernel [lindex $argv 0] \
     -initrd [lindex $argv 1] \
     -append "console=ttyS0 quiet" \
-    -m 512M \
     -smp 2 \
     -nographic \
     -no-reboot
@@ -89,10 +89,10 @@ else
     echo "  clear"
     echo ""
     timeout 60 qemu-system-x86_64 \
+        -m 512 \
         -kernel "$KERNEL" \
         -initrd "$INITRD" \
         -append "console=ttyS0 quiet" \
-        -m 512M \
         -smp 2 \
         -nographic \
         -no-reboot || true

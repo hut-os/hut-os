@@ -1,0 +1,674 @@
+#!/bin/sh
+# apt / apt-get / hpkg — HUT OS package manager
+#
+# Installs real Debian .deb packages from the official mirrors listed in
+# /etc/apt/sources.list. Extraction uses BusyBox dpkg (gzip / xz debs).
+#
+# Compatible commands:
+#   sudo apt update
+#   sudo apt install nano
+#   apt search EDITOR
+#   apt list --installed
+#   apt remove PACKAGE
+#   apt show PACKAGE
+#
+# HUTOS_SYSROOT prefixes filesystem paths (used by host-side tests).
+
+set -eu
+
+VERSION="1.0.0"
+ROOT="${HUTOS_SYSROOT:-}"
+
+SOURCES="${ROOT}/etc/apt/sources.list"
+LISTS="${ROOT}/var/lib/apt/lists"
+CACHE="${ROOT}/var/cache/apt/archives"
+DPKG_STATUS="${ROOT}/var/lib/dpkg/status"
+DPKG_INFO="${ROOT}/var/lib/dpkg/info"
+
+ARCH="amd64"
+YES=0
+DRY_RUN=0
+DOWNLOAD_ONLY=0
+CMD=""
+
+C_RESET="$(printf '\033[0m')"
+C_CYAN="$(printf '\033[1;36m')"
+C_GREEN="$(printf '\033[1;32m')"
+C_YELLOW="$(printf '\033[1;33m')"
+C_RED="$(printf '\033[1;31m')"
+
+info()  { printf '%s\n' "${C_CYAN}[apt]${C_RESET} $*"; }
+ok()    { printf '%s\n' "${C_GREEN}[apt]${C_RESET} $*"; }
+warn()  { printf '%s\n' "${C_YELLOW}[apt]${C_RESET} $*" >&2; }
+fail()  { printf '%s\n' "${C_RED}[apt]${C_RESET} $*" >&2; exit 1; }
+
+usage() {
+	cat <<'EOF'
+apt — HUT OS package manager (Debian .deb)
+
+Usage:
+  apt update                 Refresh package indexes
+  apt install [-y] PKG...    Download and install packages
+  apt remove  [-y] PKG...    Remove installed packages
+  apt purge   [-y] PKG...    Remove packages and leftover files
+  apt search  QUERY          Search the package index
+  apt show    PKG            Show package details
+  apt list [--installed]     List packages
+  apt upgrade [-y]           Upgrade installed packages
+  apt download PKG...        Download .deb files only
+
+Flags:
+  -y, --yes            Assume yes
+  --dry-run            Resolve and print actions only
+  --download-only      Download without installing
+  -h, --help           Show this help
+  -v, --version        Show version
+
+Examples:
+  sudo apt update
+  sudo apt install nano
+  sudo apt install --yes less tree
+  apt search editor
+  apt list --installed
+
+Aliases: apt-get, hpkg
+EOF
+}
+
+ensure_dirs() {
+	mkdir -p "$LISTS" "$CACHE" "$DPKG_INFO" "${ROOT}/var/lib/dpkg"
+	[ -f "$DPKG_STATUS" ] || : > "$DPKG_STATUS"
+}
+
+busybox_bin() {
+	if [ -x "${ROOT}/bin/busybox" ]; then
+		echo "${ROOT}/bin/busybox"
+	elif command -v busybox >/dev/null 2>&1; then
+		command -v busybox
+	else
+		echo ""
+	fi
+}
+
+run_dpkg() {
+	local bb
+	bb=$(busybox_bin)
+	if [ -n "$bb" ]; then
+		"$bb" dpkg "$@"
+	else
+		dpkg "$@"
+	fi
+}
+
+is_gzip() {
+	# gzip magic: 1f 8b
+	[ -s "$1" ] || return 1
+	dd if="$1" bs=1 count=2 2>/dev/null | od -An -tx1 | grep -q '1f *8b'
+}
+
+fetch() {
+	# fetch URL DEST  (locals: never clobber caller dest/url)
+	local url dest ua part
+	url="$1"
+	dest="$2"
+	case "$url" in
+		https://*) ;;
+		*) fail "refusing non-HTTPS repository URL: $url" ;;
+	esac
+	ua="HUTOS-apt/${VERSION}"
+	part="${dest}.part"
+	rm -f "$part" "$dest"
+
+	# curl's default TLS peer/host checks authenticate the HTTPS connection.
+	command -v curl >/dev/null 2>&1 || fail "curl is required for verified HTTPS downloads"
+	curl -fL --connect-timeout 30 --max-time 180 -A "$ua" --output "$part" "$url" \
+		|| rm -f "$part"
+	if [ ! -s "$part" ]; then
+		rm -f "$part"
+		return 1
+	fi
+	mv -f "$part" "$dest"
+}
+
+decompress_packages() {
+	# decompress_packages GZ OUT
+	local gz out bb
+	gz="$1"
+	out="$2"
+	if is_gzip "$gz"; then
+		if command -v gunzip >/dev/null 2>&1; then
+			gunzip -c "$gz" > "$out" || return 1
+		else
+			bb=$(busybox_bin)
+			"$bb" gunzip -c "$gz" > "$out" || return 1
+		fi
+	else
+		# Already uncompressed (some mirrors / proxies)
+		cp -f "$gz" "$out" || return 1
+	fi
+	grep -q '^Package: ' "$out"
+}
+
+list_sources() {
+	[ -f "$SOURCES" ] || fail "missing $SOURCES"
+	# Prints: URL SUITE COMPONENT
+	grep -E '^[[:space:]]*deb[[:space:]]' "$SOURCES" | while read -r _ url suite comps; do
+		[ -n "$url" ] && [ -n "$suite" ] || continue
+		url="${url%/}"
+		for comp in $comps; do
+			echo "$url $suite $comp"
+		done
+	done
+}
+
+index_file_for() {
+	local url suite comp host
+	url="$1"; suite="$2"; comp="$3"
+	host=$(echo "$url" | sed 's#https\?://##; s#[^A-Za-z0-9._-]#_#g')
+	echo "${LISTS}/${host}_dists_${suite}_${comp}_binary-${ARCH}_Packages"
+}
+
+has_index() {
+	_any=0
+	for f in "$LISTS"/*_Packages; do
+		[ -f "$f" ] || continue
+		_any=1
+		break
+	done
+	[ "$_any" = "1" ]
+}
+
+pkg_field() {
+	# pkg_field INDEX PACKAGE FIELD
+	local index pkg field
+	index="$1"; pkg="$2"; field="$3"
+	awk -v pkg="$pkg" -v field="$field" '
+		BEGIN { p="" }
+		$1 == "Package:" {
+			p=$2
+			if (field == "Package" && p == pkg) { print p; exit }
+			next
+		}
+		p == pkg && index($0, field ":") == 1 {
+			sub("^" field ":[[:space:]]*", "")
+			print
+			exit
+		}
+		NF == 0 { p="" }
+	' "$index"
+}
+
+pkg_field_any() {
+	local pkg field idx val
+	pkg="$1"; field="$2"
+	for idx in "$LISTS"/*_Packages; do
+		[ -f "$idx" ] || continue
+		val=$(pkg_field "$idx" "$pkg" "$field")
+		if [ -n "$val" ]; then
+			echo "$val"
+			echo "$idx" > "${CACHE}/.last-index"
+			return 0
+		fi
+	done
+	return 1
+}
+
+pkg_index_of() {
+	local pkg
+	pkg="$1"
+	pkg_field_any "$pkg" "Package" >/dev/null || return 1
+	cat "${CACHE}/.last-index"
+}
+
+is_installed() {
+	local pkg
+	pkg="$1"
+	[ -f "$DPKG_STATUS" ] || return 1
+	awk -v pkg="$pkg" '
+		$1=="Package:" { p=$2 }
+		$1=="Status:" && p==pkg && $0 ~ /install ok installed/ { found=1 }
+		END { exit found ? 0 : 1 }
+	' "$DPKG_STATUS"
+}
+
+installed_version() {
+	local pkg
+	pkg="$1"
+	[ -f "$DPKG_STATUS" ] || return 1
+	awk -v pkg="$pkg" '
+		$1=="Package:" { p=$2 }
+		p==pkg && $1=="Version:" { print $2; exit }
+	' "$DPKG_STATUS"
+}
+
+# Base libraries already shipped with HUT OS — never download/replace.
+is_provided() {
+	case "$1" in
+		libc6|libc-bin|libgcc-s1|libstdc++6|gcc-*-base| \
+		busybox|debianutils|dpkg|tar|gzip|xz-utils| \
+		libncursesw6|libtinfo6|libtinfo5|zlib1g| \
+		libpcre2-8-0|libcap2| \
+		hutos-base|sudo|base-files|base-passwd| \
+		essential|dash|bash|awk|coreutils|sed|grep| \
+		login|passwd|adduser|debconf|debconf-2.0| \
+		perl-base|init-system-helpers|sensible-utils)
+			return 0
+			;;
+	esac
+	return 1
+}
+
+normalize_dep() {
+	# "libc6 (>= 2.34) | libc6-udeb" -> libc6
+	echo "$1" | sed 's/[[:space:]]*([^)]*)//g; s/[[:space:]]*\[.*\]//g' | \
+		awk -F'|' '{print $1}' | awk '{print $1}' | sed 's/:any$//; s/:amd64$//'
+}
+
+resolve_deps() {
+	# resolve_deps PKG -> writes package names (one per line) to stdout
+	local pkg seen filename depends predep alldeps oldifs raw dep
+	pkg="$1"
+	seen="$2"
+	if echo "$seen" | grep -qx "$pkg"; then
+		return 0
+	fi
+	if is_provided "$pkg"; then
+		return 0
+	fi
+	if is_installed "$pkg"; then
+		return 0
+	fi
+
+	filename=$(pkg_field_any "$pkg" "Filename") || fail "Unable to locate package '$pkg'. Run: apt update"
+	echo "$pkg"
+
+	depends=$(pkg_field_any "$pkg" "Depends" || true)
+	predep=$(pkg_field_any "$pkg" "Pre-Depends" || true)
+	alldeps="$depends, $predep"
+	oldifs=$IFS
+	IFS=','
+	# shellcheck disable=SC2086
+	set -- $alldeps
+	IFS=$oldifs
+	seen="$seen
+$pkg"
+	for raw in "$@"; do
+		dep=$(normalize_dep "$raw")
+		[ -n "$dep" ] || continue
+		is_provided "$dep" && continue
+		resolve_deps "$dep" "$seen"
+	done
+}
+
+cmd_update() {
+	ensure_dirs
+	src_tmp="${CACHE}/.sources.$$"
+	list_sources > "$src_tmp"
+	if [ ! -s "$src_tmp" ]; then
+		rm -f "$src_tmp"
+		fail "No deb lines in $SOURCES"
+	fi
+	ok_count=0
+	while read -r url suite comp; do
+		idx_url="${url}/dists/${suite}/${comp}/binary-${ARCH}/Packages.gz"
+		dest=$(index_file_for "$url" "$suite" "$comp")
+		tmp="${dest}.gz"
+		info "Get: $idx_url"
+		if fetch "$idx_url" "$tmp" && decompress_packages "$tmp" "$dest"; then
+			rm -f "$tmp"
+			pkgs=$(grep -c '^Package: ' "$dest")
+			ok "Hit: $suite/$comp (${pkgs} packages)"
+			ok_count=$((ok_count + 1))
+		else
+			rm -f "$tmp" "$dest"
+			warn "Failed: $idx_url"
+		fi
+	done < "$src_tmp"
+	rm -f "$src_tmp"
+	[ "$ok_count" -gt 0 ] || fail "Could not download any package index (check network)"
+	ok "Package index updated."
+}
+
+confirm() {
+	if [ "$YES" = "1" ]; then
+		return 0
+	fi
+	printf "Do you want to continue? [Y/n] "
+	read -r ans || ans=n
+	case "$ans" in
+		""|Y|y|yes|YES) return 0 ;;
+		*) echo "Abort."; return 1 ;;
+	esac
+}
+
+download_pkg() {
+	local pkg filename sha idx deb_url base dest have
+	pkg="$1"
+	filename=$(pkg_field_any "$pkg" "Filename") || fail "No Filename for $pkg"
+	sha=$(pkg_field_any "$pkg" "SHA256" || true)
+	[ "${#sha}" -eq 64 ] && echo "$sha" | grep -q '^[0-9a-fA-F]*$' \
+		|| fail "Missing or invalid SHA256 for $pkg"
+	idx=$(cat "${CACHE}/.last-index")
+	# Recover repo URL from the index file name + sources
+	deb_url=""
+	list_sources | while read -r url suite comp; do
+		f=$(index_file_for "$url" "$suite" "$comp")
+		if [ "$f" = "$idx" ]; then
+			echo "${url}/${filename}"
+			break
+		fi
+	done > "${CACHE}/.last-url"
+	deb_url=$(cat "${CACHE}/.last-url")
+	[ -n "$deb_url" ] || fail "Cannot rebuild download URL for $pkg"
+
+	base=$(basename "$filename")
+	dest="${CACHE}/${base}"
+	if [ -f "$dest" ] && [ -n "$sha" ]; then
+		have=$(sha256sum "$dest" 2>/dev/null | awk '{print $1}')
+		if [ "$have" = "$sha" ]; then
+			echo "$dest"
+			return 0
+		fi
+	fi
+	info "Get: $deb_url"
+	fetch "$deb_url" "$dest" || fail "Download failed: $pkg"
+	have=$(sha256sum "$dest" 2>/dev/null | awk '{print $1}')
+	if [ -z "$have" ] || [ "$have" != "$sha" ]; then
+		rm -f "$dest"
+		fail "SHA256 mismatch for $pkg"
+	fi
+	echo "$dest"
+}
+
+cmd_install() {
+	ensure_dirs
+	has_index || fail "No package index. Run: sudo apt update"
+
+	if [ $# -eq 0 ]; then
+		fail "No packages specified"
+	fi
+
+	# Local .deb files
+	locals=""
+	remotes=""
+	for arg in "$@"; do
+		case "$arg" in
+			*.deb)
+				[ -f "$arg" ] || fail "File not found: $arg"
+				locals="$locals $arg"
+				;;
+			*)
+				remotes="$remotes $arg"
+				;;
+		esac
+	done
+
+	plan=""
+	for pkg in $remotes; do
+		if is_installed "$pkg" && [ "$DRY_RUN" = "0" ]; then
+			info "$pkg is already installed"
+			continue
+		fi
+		resolved=$(resolve_deps "$pkg" "")
+		plan="$plan
+$resolved"
+	done
+	plan=$(echo "$plan" | sed '/^$/d' | awk '!seen[$0]++')
+
+	if [ -z "$plan" ] && [ -z "$locals" ]; then
+		ok "Nothing to do."
+		return 0
+	fi
+
+	echo "${C_CYAN}The following packages will be installed:${C_RESET}"
+	if [ -n "$plan" ]; then
+		echo "$plan" | sed 's/^/  /'
+	fi
+	for f in $locals; do
+		echo "  $(basename "$f")  (local)"
+	done
+	echo ""
+
+	if [ "$DRY_RUN" = "1" ]; then
+		ok "Dry run — no files downloaded."
+		return 0
+	fi
+
+	confirm || return 1
+
+	debs=""
+	for pkg in $plan; do
+		path=$(download_pkg "$pkg")
+		debs="$debs $path"
+	done
+	debs="$debs $locals"
+
+	if [ "$DOWNLOAD_ONLY" = "1" ]; then
+		ok "Downloaded to $CACHE"
+		return 0
+	fi
+
+	for deb in $debs; do
+		[ -n "$deb" ] || continue
+		info "Installing $(basename "$deb")..."
+		# The resolver has planned dependencies; let dpkg reject inconsistent installs.
+		if [ -n "$ROOT" ]; then
+			warn "HUTOS_SYSROOT set — skipping dpkg (refusing to install on host)"
+			continue
+		fi
+		if run_dpkg -i "$deb"; then
+			ok "Installed $(basename "$deb")"
+		else
+			fail "dpkg could not install $(basename "$deb"); inspect dpkg status before retrying."
+		fi
+	done
+	ok "Done."
+}
+
+cmd_remove() {
+	purge="$1"
+	shift
+	[ $# -ge 1 ] || fail "No packages specified"
+	ensure_dirs
+	echo "${C_CYAN}The following packages will be removed:${C_RESET}"
+	for pkg in "$@"; do
+		echo "  $pkg"
+	done
+	echo ""
+	confirm || return 1
+	for pkg in "$@"; do
+		if is_provided "$pkg"; then
+			warn "Refusing to remove base package: $pkg"
+			continue
+		fi
+		if [ -n "$ROOT" ]; then
+			warn "HUTOS_SYSROOT set — skipping dpkg"
+			continue
+		fi
+		if [ "$purge" = "1" ]; then
+			run_dpkg -P "$pkg" || warn "Could not purge $pkg"
+		else
+			run_dpkg -r "$pkg" || warn "Could not remove $pkg"
+		fi
+	done
+}
+
+cmd_search() {
+	query="$1"
+	[ -n "$query" ] || fail "Usage: apt search QUERY"
+	has_index || fail "No package index. Run: sudo apt update"
+	echo "${C_CYAN}Matching packages:${C_RESET}"
+	for idx in "$LISTS"/*_Packages; do
+		[ -f "$idx" ] || continue
+		awk -v q="$query" '
+			BEGIN { q=tolower(q) }
+			$1=="Package:" { p=$2; d=""; matchp=0; if (index(tolower(p), q)) matchp=1; next }
+			$1=="Description:" {
+				sub(/^Description:[[:space:]]*/, "")
+				d=$0
+				if (index(tolower(d), q)) matchp=1
+			}
+			NF==0 {
+				if (matchp && p != "") printf "%s - %s\n", p, d
+				p=""; d=""; matchp=0
+			}
+		' "$idx"
+	done | awk '!seen[$0]++' | head -n 80
+}
+
+cmd_show() {
+	pkg="$1"
+	[ -n "$pkg" ] || fail "Usage: apt show PACKAGE"
+	has_index || fail "No package index. Run: sudo apt update"
+	idx=$(pkg_index_of "$pkg") || fail "Package not found: $pkg"
+	awk -v pkg="$pkg" '
+		$1=="Package:" { p=$2; dump=($2==pkg) }
+		dump { print }
+		dump && NF==0 { exit }
+	' "$idx"
+	if is_installed "$pkg"; then
+		echo "Installed: yes ($(installed_version "$pkg"))"
+	else
+		echo "Installed: no"
+	fi
+}
+
+cmd_list() {
+	only_installed="$1"
+	if [ "$only_installed" = "1" ]; then
+		if [ -f "$DPKG_STATUS" ]; then
+			awk '
+				$1=="Package:" { p=$2 }
+				$1=="Version:" { v=$2 }
+				$1=="Status:" && $0 ~ /install ok installed/ { inst=1 }
+				NF==0 {
+					if (inst && p != "") printf "%s/%s [installed]\n", p, v
+					p=""; v=""; inst=0
+				}
+				END {
+					if (inst && p != "") printf "%s/%s [installed]\n", p, v
+				}
+			' "$DPKG_STATUS"
+		else
+			warn "No dpkg status database"
+		fi
+		return 0
+	fi
+	has_index || fail "No package index. Run: sudo apt update"
+	for idx in "$LISTS"/*_Packages; do
+		[ -f "$idx" ] || continue
+		awk '
+			$1=="Package:" { p=$2 }
+			$1=="Version:" { v=$2 }
+			NF==0 && p != "" { printf "%s/%s\n", p, v; p=""; v="" }
+		' "$idx"
+	done
+}
+
+cmd_upgrade() {
+	ensure_dirs
+	has_index || fail "No package index. Run: sudo apt update"
+	to_upgrade=""
+	# Collect installed package names
+	pkgs=$(awk '$1=="Package:"{print $2}' "$DPKG_STATUS" 2>/dev/null || true)
+	for pkg in $pkgs; do
+		is_provided "$pkg" && continue
+		avail=$(pkg_field_any "$pkg" "Version" || true)
+		[ -n "$avail" ] || continue
+		have=$(installed_version "$pkg")
+		if [ -n "$have" ] && [ "$have" != "$avail" ]; then
+			to_upgrade="$to_upgrade $pkg"
+		fi
+	done
+	if [ -z "$to_upgrade" ]; then
+		ok "All packages are up to date."
+		return 0
+	fi
+	# shellcheck disable=SC2086
+	cmd_install $to_upgrade
+}
+
+cmd_download() {
+	ensure_dirs
+	has_index || fail "No package index. Run: sudo apt update"
+	DOWNLOAD_ONLY=1
+	cmd_install "$@"
+}
+
+# --- argument parsing ---
+while [ $# -gt 0 ]; do
+	case "$1" in
+		-y|--yes|--assume-yes)
+			YES=1
+			shift
+			;;
+		--dry-run|--simulate)
+			DRY_RUN=1
+			shift
+			;;
+		--download-only)
+			DOWNLOAD_ONLY=1
+			shift
+			;;
+		-h|--help|help)
+			usage
+			exit 0
+			;;
+		-v|--version|version)
+			echo "apt (HUT OS) $VERSION"
+			echo "Backend: Debian .deb via BusyBox dpkg"
+			exit 0
+			;;
+		update|install|remove|purge|search|show|list|upgrade|download)
+			CMD="$1"
+			shift
+			break
+			;;
+		-*)
+			fail "Unknown option: $1"
+			;;
+		*)
+			# apt-get style: apt-get install ...
+			CMD="$1"
+			shift
+			break
+			;;
+	esac
+done
+
+# Flags after the command: apt install -y nano
+REST=""
+while [ $# -gt 0 ]; do
+	case "$1" in
+		-y|--yes|--assume-yes) YES=1; shift ;;
+		--dry-run|--simulate) DRY_RUN=1; shift ;;
+		--download-only) DOWNLOAD_ONLY=1; shift ;;
+		--installed) REST="$REST --installed"; shift ;;
+		-h|--help) usage; exit 0 ;;
+		--) shift; REST="$REST $*"; break ;;
+		*) REST="$REST $1"; shift ;;
+	esac
+done
+
+# shellcheck disable=SC2086
+set -- $REST
+
+case "$CMD" in
+	""|help) usage ;;
+	update) cmd_update ;;
+	install) cmd_install "$@" ;;
+	remove) cmd_remove 0 "$@" ;;
+	purge) cmd_remove 1 "$@" ;;
+	search) cmd_search "${1:-}" ;;
+	show) cmd_show "${1:-}" ;;
+	list)
+		only=0
+		[ "${1:-}" = "--installed" ] && only=1
+		cmd_list "$only"
+		;;
+	upgrade) cmd_upgrade ;;
+	download) cmd_download "$@" ;;
+	*)
+		fail "Unknown command: $CMD (try apt --help)"
+		;;
+esac

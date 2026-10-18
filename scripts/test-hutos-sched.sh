@@ -41,7 +41,7 @@ echo "Booting HUT OS for scheduler test..."
   printf 'poweroff -f\n'
   sleep 2
 } | timeout 35 qemu-system-x86_64 \
-  -m 256 \
+  -m 512 \
   -kernel "$KERNEL" \
   -initrd "$INITRD" \
   -append "console=ttyS0 hutos_sched_lat=0" \

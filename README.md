@@ -46,9 +46,9 @@ GRUB / QEMU -kernel
         ↓
    /init  →  mounts · mdev · hostname · networking
         ↓
-   banner · Zsh + Oh My Zsh
+   BusyBox init · authenticated serial/TTY login
         ↓
-   about · hutinfo · BusyBox utilities
+   Zsh · sudo/PAM · BusyBox utilities · hutos engineering CLI
 ```
 
 | Component | Implementation |
@@ -61,7 +61,25 @@ GRUB / QEMU -kernel
 | Devices | BusyBox mdev + `devtmpfs` |
 | Networking | loopback + eth0 DHCP |
 | Shell | Zsh + Oh My Zsh |
-| Package manager | Deferred — see [`docs/PACKAGE_MANAGER.md`](docs/PACKAGE_MANAGER.md) |
+| Package manager | `apt` / `apt-get` / `hpkg` — official Debian `.deb` feeds — see [`docs/PACKAGE_MANAGER.md`](docs/PACKAGE_MANAGER.md) |
+| Privilege escalation | Upstream sudo + PAM, sudo group; setuid/root ownership preserved by image builders |
+| Engineering tools | Native `hutos` CLI — see [`docs/ENGINEERING_TOOLS.md`](docs/ENGINEERING_TOOLS.md) |
+
+## Verification status
+
+The serial-console QEMU check verifies first-boot password setup, `hut` login,
+and rejection of passwordless sudo. It currently exposes a remaining PAM
+integration failure: sudo rejects the same password accepted by console
+login, so authenticated escalation is **not yet verified and must not be
+treated as working**. Run the check with:
+
+```sh
+python3 scripts/test-console-qemu.py
+```
+
+Package repository signatures are also not yet
+verified, and the engineering toolkit is intentionally limited to the commands
+listed in its documentation.
 
 Related repositories:
 
@@ -86,14 +104,27 @@ hut-os/
 
 ---
 
-## Inside HUT OS
+## First boot and commands
+
+The first boot asks the owner to set passwords for the locked `root` and `hut`
+accounts. HUTOS ships no default password. The installed ext4 root preserves
+accounts, package state, `/etc`, `/home`, and `/var` across boots; the live
+initramfs is temporary.
 
 ```text
-hut@hut-os:~# about      # project story
-hut@hut-os:~# hutinfo    # version, kernel, memory, uptime
-hut@hut-os:~# ifconfig
-hut@hut-os:~# ps
+hut@hut-os:~$ hutos about        # live system dashboard
+hut@hut-os:~$ hutos tools        # interactive engineering toolkit
+hut@hut-os:~$ hutos mech beam 2 1000 2e11 8e-6 center
+hut@hut-os:~$ hutos chem molar-mass 'Al2(SO4)3'
+hut@hut-os:~$ hutos doctor       # system health checks
+hut@hut-os:~$ sudo apt update    # refresh package index over HTTPS
+hut@hut-os:~$ nano notes.txt
 ```
+
+Scientific command scope and formula assumptions are documented in
+[`docs/ENGINEERING_TOOLS.md`](docs/ENGINEERING_TOOLS.md). Package transport is
+HTTPS with SHA256 checks, but repository `InRelease` signatures are not yet
+verified; see [`docs/PACKAGE_MANAGER.md`](docs/PACKAGE_MANAGER.md).
 
 ---
 

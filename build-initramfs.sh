@@ -37,11 +37,21 @@ if [ ! -f "$ROOTFS_DIR/bin/busybox" ]; then
 fi
 
 # Ensure HUTOS tools are executable
-for tool in about hutctl hutinfo hutsched hutbench hutdiag; do
+for tool in about hutctl hutinfo hutsched hutbench hutdiag apt sudo hutos; do
     if [ -f "$ROOTFS_DIR/bin/$tool" ]; then
         chmod +x "$ROOTFS_DIR/bin/$tool"
     fi
 done
+
+chmod 04755 "$ROOTFS_DIR/bin/sudo"
+chmod 0440 "$ROOTFS_DIR/etc/sudoers"
+chmod 0640 "$ROOTFS_DIR/etc/shadow"
+chmod 0700 "$ROOTFS_DIR/var/lib/sudo"
+
+if [ -x "$PROJECT_ROOT/scripts/bundle-userland-tools.sh" ]; then
+    "$PROJECT_ROOT/scripts/bundle-userland-tools.sh"
+fi
+"$PROJECT_ROOT/scripts/build-hutos-tools.sh"
 
 # Ensure common library is present
 if [ -f "$ROOTFS_DIR/lib/hutos-common.sh" ]; then
@@ -63,7 +73,12 @@ echo "[2/4] Creating initramfs archive..."
 cd "$ROOTFS_DIR"
 
 # Create the cpio archive and compress it
-find . -print0 | cpio --null -o --format=newc 2>/dev/null | gzip -9 > "$OUTPUT_FILE"
+{
+    find . -path ./home/hut -prune -o -print0 |
+        cpio --null -o --format=newc --owner=0:0 2>/dev/null
+    find ./home/hut -print0 |
+        cpio --null -o --format=newc --owner=1000:1000 2>/dev/null
+} | gzip -9 > "$OUTPUT_FILE"
 
 if [ $? -ne 0 ]; then
     echo "Error: Failed to create initramfs"
@@ -90,7 +105,7 @@ echo "  Output: $OUTPUT_FILE"
 echo "═══════════════════════════════════════════════════════════"
 echo ""
 echo "To test HUT OS, run:"
-echo "  qemu-system-x86_64 -kernel kernel/arch/x86/boot/bzImage \\"
+echo "  qemu-system-x86_64 -m 512 -kernel kernel/arch/x86/boot/bzImage \\"
 echo "                     -initrd initramfs.cpio.gz \\"
 echo "                     -append \"console=ttyS0\" \\"
 echo "                     -nographic"

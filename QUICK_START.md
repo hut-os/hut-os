@@ -26,6 +26,7 @@ That's it! You'll boot into Zsh with Oh My Zsh! 🎉
 ### Boot in QEMU Manually
 ```bash
 qemu-system-x86_64 \
+    -m 512 \
     -kernel kernel/arch/x86/boot/bzImage \
     -initrd initramfs.cpio.gz \
     -append "console=ttyS0" \

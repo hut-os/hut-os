@@ -37,7 +37,7 @@ qemu-system-x86_64 \
     -kernel "$KERNEL" \
     -initrd "$INITRD" \
     -append "console=ttyS0 quiet" \
-    -m 512M \
+    -m 512 \
     -smp 2 \
     -nographic \
     -no-reboot

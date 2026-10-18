@@ -14,7 +14,11 @@ mkdir -p "$PROJECT_ROOT/build"
 if [ "${HUTOS_SKIP_BUNDLE:-0}" != "1" ]; then
   echo "[initramfs] Bundling installer tools..."
   "$PROJECT_ROOT/scripts/bundle-installer-tools.sh"
+  echo "[initramfs] Bundling userland tools (nano, apt applets, certs)..."
+  "$PROJECT_ROOT/scripts/bundle-userland-tools.sh"
 fi
+
+"$PROJECT_ROOT/scripts/build-hutos-tools.sh"
 
 # Embed kernel into live /boot so installs work without CD access
 if [ "${HUTOS_EMBED_KERNEL:-1}" = "1" ] && [ -f "$KERNEL" ]; then
@@ -35,9 +39,21 @@ chmod +x "$ROOTFS/bin/hut-install" 2>/dev/null || true
 chmod +x "$ROOTFS/bin/about" "$ROOTFS/bin/hutinfo" 2>/dev/null || true
 find "$ROOTFS/bin" -type l -exec chmod -h a+x {} \; 2>/dev/null || true
 
+# Preserve security-sensitive ownership and modes in rootless builds. The
+# first archive owns the system as root; the account's home is UID/GID 1000.
+chmod 04755 "$ROOTFS/bin/sudo"
+chmod 0440 "$ROOTFS/etc/sudoers"
+chmod 0640 "$ROOTFS/etc/shadow"
+chmod 0700 "$ROOTFS/var/lib/sudo"
+
 (
   cd "$ROOTFS"
-  find . -print0 | cpio --null -o --format=newc 2>/dev/null | gzip -9 > "$OUT"
+  {
+    find . -path ./home/hut -prune -o -print0 |
+      cpio --null -o --format=newc --owner=0:0 2>/dev/null
+    find ./home/hut -print0 |
+      cpio --null -o --format=newc --owner=1000:1000 2>/dev/null
+  } | gzip -9 > "$OUT"
 )
 
 cp -f "$OUT" "$PROJECT_ROOT/initramfs.cpio.gz"

@@ -19,7 +19,7 @@ echo "Log file: $LOG_FILE"
 echo ""
 
 timeout 30 qemu-system-x86_64 \
-    -m 256 \
+    -m 512 \
     -kernel "$KERNEL" \
     -initrd "$INITRD" \
     -append "console=ttyS0" \

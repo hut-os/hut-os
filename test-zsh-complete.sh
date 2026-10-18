@@ -30,6 +30,7 @@ echo ""
 echo "[3/5] Testing boot sequence..."
 echo "  (Booting HUT OS in QEMU for 8 seconds...)"
 timeout 8 qemu-system-x86_64 \
+    -m 512 \
     -kernel kernel/arch/x86/boot/bzImage \
     -initrd initramfs.cpio.gz \
     -append "console=ttyS0" \
@@ -45,6 +46,7 @@ echo ""
 
 echo "[4/5] Checking for errors in boot..."
 BOOT_OUTPUT=$(timeout 8 qemu-system-x86_64 \
+    -m 512 \
     -kernel kernel/arch/x86/boot/bzImage \
     -initrd initramfs.cpio.gz \
     -append "console=ttyS0" \

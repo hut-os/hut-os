@@ -204,6 +204,9 @@ check "hutsched" "command -v hutsched" no
 check "hutbench" "command -v hutbench" no
 check "hutctl" "command -v hutctl" no
 check "about" "command -v about" no
+check "apt" "command -v apt" no
+check "sudo" "command -v sudo" no
+check "nano" "command -v nano" no
 
 # Essential Commands
 print_section "Essential Commands"
@@ -213,6 +216,8 @@ check "ls" "command -v ls" yes
 check "cat" "command -v cat" yes
 check "mount" "command -v mount" yes
 check "ip/ifconfig" "command -v ip || command -v ifconfig" no
+check "wget" "command -v wget" no
+check "dpkg" "command -v dpkg" no
 
 # Network
 print_section "Network"

@@ -1,7 +1,7 @@
-PRETTY_NAME="HUT OS 3.0.0"
+PRETTY_NAME="HUT OS 3.1.0"
 NAME="HUT OS"
-VERSION_ID="3.0.0"
-VERSION="3.0.0 (Dormitory Study Hall)"
+VERSION_ID="3.1.0"
+VERSION="3.1.0 (Dormitory Study Hall)"
 VERSION_CODENAME=dormitory
 ID=hutos
 ID_LIKE=linux

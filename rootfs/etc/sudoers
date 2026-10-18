@@ -1,0 +1,7 @@
+# HUT OS sudoers. Keep this file owned by root and mode 0440.
+Defaults env_reset
+Defaults secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Defaults timestamp_timeout=5
+
+root ALL=(ALL:ALL) ALL
+%sudo ALL=(ALL:ALL) ALL

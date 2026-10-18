@@ -52,7 +52,7 @@ EOF
 
 # Boot QEMU with test commands
 timeout 60 qemu-system-x86_64 \
-    -m 256 \
+    -m 512 \
     -kernel "$KERNEL" \
     -initrd "$INITRD" \
     -append "console=ttyS0" \

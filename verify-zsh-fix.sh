@@ -30,10 +30,10 @@ sleep 3
 
 # Boot HUTOS
 qemu-system-x86_64 \
+    -m 512 \
     -kernel "$KERNEL" \
     -initrd "$INITRD" \
     -append "console=ttyS0 quiet" \
-    -m 512M \
     -smp 2 \
     -nographic \
     -no-reboot

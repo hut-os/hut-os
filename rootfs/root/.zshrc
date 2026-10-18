@@ -3,12 +3,12 @@
 # Developer: Arshia Mohammadei
 
 # Environment
-export HOME=/root
+export HOME="${HOME:-/root}"
 export TERM=linux
 export PATH=/bin:/sbin:/usr/bin:/usr/sbin
 
 # HUT OS Identity
-export HUTOS_VERSION="2.1.0"
+export HUTOS_VERSION="3.1.0"
 export HUTOS_NAME="HUT OS"
 
 # Oh My Zsh (minimal configuration)
@@ -33,7 +33,7 @@ fi
 autoload -U colors && colors 2>/dev/null || true
 
 # Simple, reliable prompt
-PROMPT='%{%F{cyan}%}hut@hut-os%{%f%}:%{%F{blue}%}%~%{%f%}# '
+PROMPT='%{%F{cyan}%}%n@%m%{%f%}:%{%F{blue}%}%~%{%f%}# '
 
 # Right prompt (empty for simplicity)
 RPROMPT=''
@@ -48,7 +48,7 @@ alias cls='clear'
 alias huname='echo "$HUTOS_NAME - Hamedan University of Technology Operating System"'
 
 # History configuration
-HISTFILE=/root/.zsh_history
+HISTFILE="$HOME/.zsh_history"
 HISTSIZE=1000
 SAVEHIST=1000
 setopt HIST_IGNORE_DUPS
@@ -57,6 +57,9 @@ setopt SHARE_HISTORY
 
 # Key bindings
 bindkey -e  # Emacs key bindings
+
+# Keep Zsh's built-in history navigation. Optional Debian widgets may be
+# absent or versioned differently in a minimal initramfs.
 
 # Completion system
 autoload -Uz compinit
@@ -67,22 +70,19 @@ zstyle ':completion:*' menu select 2>/dev/null || true
 zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}' 2>/dev/null || true
 
 # Make sure we're using UTF-8
-export LC_ALL=C
-export LANG=C
+unset LC_ALL
+export LANG=C.UTF-8
 
-# Welcome message (only on first shell)
-if [[ -z "$HUTOS_SHELL_LOADED" ]]; then
-    export HUTOS_SHELL_LOADED=1
-    echo ""
-    echo -e "\033[1;36m╔══════════════════════════════════════════════════════════════╗\033[0m"
-    echo -e "\033[1;36m║               Welcome to Zsh on HUT OS                       ║\033[0m"
-    echo -e "\033[1;36m╚══════════════════════════════════════════════════════════════╝\033[0m"
-    echo ""
-    echo -e "\033[1;32mZsh with Oh My Zsh is now running!\033[0m"
-    echo ""
-    echo "Try these commands:"
-    echo "  • about      - Display HUT OS information"
-    echo "  • ll         - List files (long format)"
-    echo "  • huname     - Show HUT OS name"
-    echo ""
+# Compact welcome; set HUTOS_NO_WELCOME=1 or create ~/.config/hutos/no-welcome
+# to disable it.
+if [[ -z "$HUTOS_NO_WELCOME" && ! -e "$HOME/.config/hutos/no-welcome" && -o interactive ]]; then
+    print -P "\n%F{cyan}HUTOS 3.1%f  %F{white}Engineering Linux%f"
+    print -P "%F{green}Ready.%f  Try %F{cyan}hutos tools%f, %F{cyan}hutos about%f, or %F{cyan}hutos doctor%f.\n"
 fi
+
+# Suggest apt when a command is missing
+command_not_found_handler() {
+    echo "$1: command not found"
+    echo "Try: sudo apt update && sudo apt install $1"
+    return 127
+}

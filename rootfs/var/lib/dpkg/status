@@ -1,0 +1,94 @@
+Package: busybox
+Status: install ok installed
+Priority: required
+Section: utils
+Architecture: amd64
+Version: 1.37.0
+Description: Tiny utilities for small and embedded systems
+ HUT OS ships BusyBox as the core userspace.
+
+Package: libc6
+Status: install ok installed
+Priority: required
+Section: libs
+Architecture: amd64
+Version: 2.42
+Provides: libc6
+Description: GNU C Library (bundled with HUT OS)
+ Provided by the HUT OS glibc runtime.
+
+Package: libc-bin
+Status: install ok installed
+Priority: required
+Section: libs
+Architecture: amd64
+Version: 2.42
+Description: GNU C Library: Binaries (virtual)
+
+Package: libgcc-s1
+Status: install ok installed
+Priority: required
+Section: libs
+Architecture: amd64
+Version: 14
+Description: GCC support library (virtual / bundled)
+
+Package: libncursesw6
+Status: install ok installed
+Priority: optional
+Section: libs
+Architecture: amd64
+Version: 6.5
+Description: shared libraries for terminal handling (bundled)
+
+Package: libtinfo6
+Status: install ok installed
+Priority: optional
+Section: libs
+Architecture: amd64
+Version: 6.5
+Description: shared low-level terminfo library (bundled)
+
+Package: zlib1g
+Status: install ok installed
+Priority: optional
+Section: libs
+Architecture: amd64
+Version: 1.3
+Description: compression library (bundled)
+
+Package: debianutils
+Status: install ok installed
+Priority: required
+Section: utils
+Architecture: amd64
+Version: 5.0
+Description: Miscellaneous utilities (virtual / BusyBox)
+
+Package: sudo
+Status: install ok installed
+Priority: optional
+Section: admin
+Architecture: amd64
+Version: 1.0
+Description: HUT OS sudo privilege helper
+
+Package: hutos-base
+Status: install ok installed
+Priority: required
+Section: admin
+Architecture: amd64
+Version: 3.1.0
+Description: HUT OS base system
+ Essential files and the apt/hpkg package manager.
+
+
+Package: nano
+Status: install ok installed
+Priority: optional
+Section: editors
+Architecture: amd64
+Version: 8.7.1-hutos
+Description: GNU nano text editor (bundled)
+ Small, friendly editor shipped with HUT OS. Reinstall with
+ `sudo apt install nano` to get the latest Debian package.

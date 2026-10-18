@@ -10,7 +10,7 @@
 export PATH=/bin:/sbin:/usr/bin:/usr/sbin
 export HOME=/root
 export TERM=linux
-export HUTOS_VERSION=3.0.0
+export HUTOS_VERSION=3.1.0
 
 C_RESET="\033[0m"
 C_CYAN="\033[1;36m"
@@ -97,7 +97,9 @@ try_mount tmpfs none /run "nosuid,nodev,mode=0755,size=16m" >/dev/null 2>&1
 # --- Device manager (BusyBox mdev) ---
 # Never block boot on slow media (e.g. ISO/CD-ROM under QEMU).
 if [ -x /sbin/mdev ] || [ -x /bin/mdev ]; then
-    echo /sbin/mdev > /proc/sys/kernel/hotplug 2>/dev/null
+    if [ -e /proc/sys/kernel/hotplug ]; then
+        echo /sbin/mdev > /proc/sys/kernel/hotplug 2>/dev/null || true
+    fi
     if command -v timeout >/dev/null 2>&1; then
         timeout 2 mdev -s >/dev/null 2>&1 \
             && boot_status "ok" "Device manager (mdev) online" \
@@ -125,19 +127,27 @@ ifconfig lo 127.0.0.1 up 2>/dev/null \
 boot_status "ok" "Loopback interface up"
 
 # Bring up eth0 if present (QEMU -nic user / e1000)
-if [ -d /sys/class/net/eth0 ]; then
-    ifconfig eth0 up 2>/dev/null || ip link set eth0 up 2>/dev/null || true
-    # Best-effort DHCP; never block boot
+_network_found=0
+for _net_path in /sys/class/net/*; do
+    [ -e "$_net_path" ] || continue
+    _net=$(basename "$_net_path")
+    [ "$_net" = lo ] && continue
+    _network_found=1
+    ifconfig "$_net" up 2>/dev/null || ip link set "$_net" up 2>/dev/null || true
+    # Best-effort one-shot DHCP with address, route and DNS configuration.
     if command -v udhcpc >/dev/null 2>&1; then
-        udhcpc -i eth0 -n -q -t 3 -T 1 >/dev/null 2>&1 \
-            && boot_status "ok" "Network: eth0 (DHCP)" \
-            || boot_status "warn" "Network: eth0 up (no DHCP lease)"
+        udhcpc -i "$_net" -s /usr/share/udhcpc/default.script -n -q -t 3 -T 1 >/dev/null 2>&1 \
+            && boot_status "ok" "Network: $_net (DHCP)" \
+            || boot_status "warn" "Network: $_net up (no DHCP lease)"
     else
-        boot_status "ok" "Network: eth0 up"
+        boot_status "ok" "Network: $_net up (DHCP client unavailable)"
     fi
-else
-    boot_status "info" "No eth0 — networking skipped"
-fi
+done
+[ "$_network_found" = "1" ] || boot_status "info" "No network interface — networking skipped"
+
+# BusyBox logging persists on an installed root and is harmless in the live image.
+syslogd -O /var/log/messages 2>/dev/null || true
+klogd 2>/dev/null || true
 
 boot_status "ok" "BusyBox userspace online"
 boot_status "ok" "HUT OS base ready"
@@ -216,65 +226,37 @@ if [ "$HUTOS_SELFTEST" = "1" ]; then
     poweroff -f 2>/dev/null || reboot -f 2>/dev/null || true
 fi
 
-# --- Banner ---
 echo ""
-echo -e "${C_CYAN}═══════════════════════════════════════════════════════════${C_RESET}"
-echo ""
-
-if [ -f /etc/hut-banner.txt ]; then
-    cat /etc/hut-banner.txt
-else
-    echo -e "${C_CYAN}        _   _ _   _ _____    ___  ____  ${C_RESET}"
-    echo -e "${C_CYAN}       | | | | | | |_   _|  / _ \\/ ___| ${C_RESET}"
-    echo -e "${C_CYAN}       | |_| | | | | | |   | | | \\___ \\ ${C_RESET}"
-    echo -e "${C_CYAN}       |  _  | |_| | | |   | |_| |___) |${C_RESET}"
-    echo -e "${C_CYAN}       |_| |_|\\___/  |_|    \\___/|____/ ${C_RESET}"
-fi
-
-echo ""
-echo -e "${C_WHITE}════════════════════════════════════════════════════════════${C_RESET}"
-echo -e "${C_WHITE}                          H U T   O S                       ${C_RESET}"
-echo -e "${C_WHITE}              Hamedan University of Technology              ${C_RESET}"
-echo -e "${C_WHITE}════════════════════════════════════════════════════════════${C_RESET}"
-echo ""
-echo -e "${C_GREEN}             Welcome to HUT Operating System                ${C_RESET}"
-echo ""
-echo -e "${C_DIM}         A minimal Linux-based OS, built from scratch       ${C_RESET}"
-echo -e "${C_DIM}            in a university dormitory study hall.           ${C_RESET}"
-echo ""
-echo -e "${C_CYAN}────────────────────────────────────────────────────────────${C_RESET}"
-echo -e "  ${C_WHITE}Developer:${C_RESET}  Arshia Mohammadei"
-echo -e "  ${C_WHITE}GitHub:${C_RESET}     https://github.com/itashia"
-echo -e "  ${C_WHITE}Field:${C_RESET}      Mechanical Engineering - 2nd Semester"
-echo -e "  ${C_WHITE}Version:${C_RESET}    $HUTOS_VERSION"
-echo -e "${C_CYAN}────────────────────────────────────────────────────────────${C_RESET}"
-echo ""
-echo -e "${C_DIM}  \"One day I was sitting in the dormitory study hall,"
-echo -e "   had nothing better to do, and started building my own"
-echo -e "   operating system."
-echo ""
-echo -e "   And what better name could it have than our university?"
-echo ""
-echo -e "   Welcome to HUT OS.\"${C_RESET}"
-echo ""
-echo -e "${C_CYAN}════════════════════════════════════════════════════════════${C_RESET}"
-echo ""
-echo -e "${C_GREEN}System ready.${C_RESET} Try ${C_CYAN}about${C_RESET}, ${C_CYAN}hutinfo${C_RESET}, or ${C_CYAN}hut-install${C_RESET}."
-echo ""
+echo -e "${C_CYAN}HUTOS ${HUTOS_VERSION}${C_RESET}  Hamedan University of Technology"
+echo -e "${C_DIM}Engineering Linux · text console${C_RESET}"
 
 cd /root 2>/dev/null || cd /
 
-# Keep a shell forever — exiting must not kill PID 1
-boot_status "ok" "Starting Zsh shell"
-while true; do
-    if [ -x /bin/zsh ]; then
-        /bin/zsh
-    else
-        boot_status "warn" "Zsh not found — falling back to ash"
-        export PS1="hut@hut-os:\\w# "
-        /bin/sh
-    fi
-    echo ""
-    echo -e "${C_DIM}Shell exited. Restarting... (use poweroff/reboot to shut down)${C_RESET}"
-    echo ""
-done
+# Locked accounts cannot log in until the owner chooses passwords. This runs
+# only on a newly built/installed root filesystem and stores hashes in /etc/shadow.
+if [ -f /etc/hutos/firstboot ]; then
+    echo "First boot: set passwords for the root and hut accounts."
+    # PID 1 has no controlling TTY yet. Explicitly disable console echo while
+    # passwd reads from /dev/console so secrets never appear in serial logs.
+    trap 'stty echo </dev/console 2>/dev/null || true' EXIT HUP INT TERM
+    for _account in root hut; do
+        while :; do
+            stty -echo </dev/console 2>/dev/null || true
+            if passwd "$_account" </dev/console; then
+                stty echo </dev/console 2>/dev/null || true
+                break
+            fi
+            stty echo </dev/console 2>/dev/null || true
+            echo "Password was not set for $_account; try again."
+        done
+    done
+    stty echo </dev/console 2>/dev/null || true
+    trap - EXIT HUP INT TERM
+    rm -f /etc/hutos/firstboot
+    sync
+fi
+
+# Replace this bootstrap with BusyBox init as PID 1. It supervises authenticated
+# gettys and performs the configured sync action during shutdown.
+boot_status "ok" "Starting authenticated console login"
+exec /bin/busybox init

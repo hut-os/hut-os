@@ -15,7 +15,7 @@ echo "Exit QEMU: Ctrl+A then X"
 echo ""
 
 exec qemu-system-x86_64 \
-  -m 256 \
+  -m 512 \
   -cdrom "$ISO" \
   -boot d \
   -nic user,model=e1000 \

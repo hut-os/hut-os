@@ -13,7 +13,7 @@ C_RED="\033[1;31m"
 C_BLUE="\033[1;34m"
 
 # Constants
-HUTOS_VERSION="3.0.0"
+HUTOS_VERSION="3.1.0"
 HUTOS_NAME="HUT OS"
 
 # Source os-release if available

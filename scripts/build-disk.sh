@@ -6,7 +6,7 @@ set -euo pipefail
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ROOTFS="$PROJECT_ROOT/rootfs"
 KERNEL="$PROJECT_ROOT/kernel/arch/x86/boot/bzImage"
-OUT="$PROJECT_ROOT/build/hutos.img"
+OUT="${HUTOS_DISK_IMAGE:-$PROJECT_ROOT/build/hutos.img}"
 SIZE_MB="${HUTOS_DISK_MB:-256}"
 STAGING="$PROJECT_ROOT/build/disk-root"
 
@@ -42,10 +42,27 @@ if [ "$NEED" -gt "$SIZE_MB" ]; then
 fi
 
 echo "[disk] Creating ${SIZE_MB}M ext4 image (label HUTOS)..."
+if ! command -v fakeroot >/dev/null 2>&1; then
+  echo "Error: fakeroot is required to create a correctly owned root filesystem." >&2
+  exit 1
+fi
 rm -f "$OUT"
-# Preallocate then format with directory contents
+# Preallocate then populate the image under fakeroot so normal users do not
+# become owners of /etc, /bin, sudo, or other system files in the guest.
 dd if=/dev/zero of="$OUT" bs=1M count="$SIZE_MB" status=none
-mkfs.ext4 -F -L HUTOS -d "$STAGING" -q "$OUT"
+fakeroot -- sh -c '
+  staging="$1"
+  output="$2"
+  chown -hR 0:0 "$staging" 2>/dev/null || true
+  chown -hR 1000:1000 "$staging/home/hut" 2>/dev/null || true
+  chown 0:42 "$staging/etc/shadow" 2>/dev/null || true
+  chown 0:0 "$staging/etc/sudoers" "$staging/bin/sudo" 2>/dev/null || true
+  chmod 0640 "$staging/etc/shadow"
+  chmod 0440 "$staging/etc/sudoers"
+  chmod 04755 "$staging/bin/sudo"
+  chmod 0700 "$staging/var/lib/sudo"
+  mkfs.ext4 -F -L HUTOS -d "$staging" -q "$output"
+' sh "$STAGING" "$OUT"
 
 ln -sfn "build/hutos.img" "$PROJECT_ROOT/hutos.img"
 

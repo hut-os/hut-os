@@ -28,7 +28,7 @@ echo ""
 read -p "Press Enter to boot HUTOS..." 
 
 exec qemu-system-x86_64 \
-    -m 256 \
+    -m 512 \
     -kernel "$KERNEL" \
     -initrd "$INITRD" \
     -append "console=ttyS0" \

@@ -17,9 +17,30 @@ jobs:
           test -f rootfs/init
           test -f rootfs/bin/about
           test -f rootfs/bin/hutinfo
+          test -f rootfs/bin/apt
+          test -f rootfs/bin/sudo
+          test -f rootfs/etc/apt/sources.list
           test -f configs/hutos_defconfig
           test -f build.sh
           test -x build.sh || chmod +x build.sh scripts/*.sh run.sh
+
+      - name: Package manager sanity
+        run: |
+          chmod +x rootfs/bin/apt scripts/bundle-userland-tools.sh scripts/build-hutos-tools.sh
+          ./scripts/bundle-userland-tools.sh
+          ./scripts/build-hutos-tools.sh
+          HUTOS_SYSROOT="$PWD/rootfs" ./rootfs/bin/apt --help | grep -q "package manager"
+          HUTOS_SYSROOT="$PWD/rootfs" ./rootfs/bin/apt --version | grep -q "HUT OS"
+          file rootfs/bin/sudo | grep -q "ELF"
+          test -f rootfs/usr/libexec/sudo/sudoers.so
+          test -f rootfs/etc/pam.d/sudo
+          ! grep -Eq 'NOPASSWD|!authenticate' rootfs/etc/sudoers
+          test -x rootfs/usr/bin/nano || test -L rootfs/bin/nano
+
+      - name: Engineering calculations
+        run: |
+          chmod +x scripts/build-hutos-tools.sh test-hutos-science.sh
+          ./test-hutos-science.sh
 
       - name: Validate init shebang
         run: head -1 rootfs/init | grep -q busybox

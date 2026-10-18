@@ -1,5 +1,20 @@
 # Changelog
 
+## 3.1.0 — Package manager and userland tools (2026-10-04)
+
+### Added
+- **`apt` / `apt-get` / `hpkg`** — real Debian package manager (official
+  `deb.debian.org` indexes, SHA256-checked `.deb` files, BusyBox `dpkg`)
+- **`sudo`** so `sudo apt install …` works
+- **GNU nano** plus BusyBox applets used by apt (`wget`, `dpkg`, `xz`, `ar`, …)
+- `/etc/apt/sources.list` — Debian 13 (trixie) amd64
+- `scripts/bundle-userland-tools.sh` — copies nano, certs, and applet links
+
+### Docs
+- `docs/PACKAGE_MANAGER.md` — no longer deferred; documents the Debian backend
+
+---
+
 ## 3.0.0 — Infrastructure base (2026-09-28)
 
 ### Added

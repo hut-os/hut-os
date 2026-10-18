@@ -1,0 +1,6 @@
+# HUT OS BusyBox init: text consoles only.
+::respawn:/sbin/getty -L 115200 ttyS0 linux
+tty1::respawn:/sbin/getty 38400 tty1 linux
+::ctrlaltdel:/sbin/reboot
+::shutdown:/bin/sync
+::shutdown:/bin/umount -a -r

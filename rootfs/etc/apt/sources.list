@@ -1,0 +1,9 @@
+# HUT OS — official Debian package feeds
+# These are real Debian repositories. Packages are standard .deb files.
+#
+# Default: Debian 13 (trixie) amd64. HTTPS is required by the client.
+# Switch suite/mirror by editing this file, then run: apt update
+
+deb https://deb.debian.org/debian trixie main
+# Optional extra feed (add only after repository signature verification is implemented):
+# deb https://security.debian.org/debian-security trixie-security main
